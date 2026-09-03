@@ -46,6 +46,7 @@ export default function TrySection() {
     mode,
     bridge,
     notice,
+    payment,
     playRecording,
     turns,
     elapsed,
@@ -201,6 +202,44 @@ export default function TrySection() {
                 <p className="mt-3 text-[0.8125rem] leading-snug text-ink-3">
                   {notice}
                 </p>
+              )}
+
+              {/* A checkout the agent opened mid-call. The link is shown, never
+                  spoken — and it only reads as paid once the bridge has verified
+                  the provider's webhook server-side. */}
+              {payment && (
+                <div className="mt-3 rounded-xl border border-hairline p-3">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="type-meta text-[0.5625rem] text-ink-3">
+                      {payment.settled === "paid"
+                        ? "· payment confirmed"
+                        : payment.settled === "failed"
+                          ? "· payment not completed"
+                          : "· awaiting payment"}
+                    </span>
+                    {payment.amountRupees != null && (
+                      <span className="type-data text-[0.8125rem] text-ink">
+                        ₹{payment.amountRupees.toLocaleString("en-IN")}
+                      </span>
+                    )}
+                  </div>
+                  {payment.settled ? (
+                    <p className="mt-1.5 text-[0.8125rem] leading-snug text-ink-2">
+                      {payment.settled === "paid"
+                        ? "Confirmed by the payment provider, verified on the server."
+                        : "The provider did not confirm this one. The agent will offer a fresh link."}
+                    </p>
+                  ) : (
+                    <a
+                      href={payment.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 flex h-10 items-center justify-center rounded-full bg-ink text-[0.875rem] font-medium text-white transition-transform duration-200 hover:scale-[1.02]"
+                    >
+                      Open secure checkout
+                    </a>
+                  )}
+                </div>
               )}
 
               <div className="mt-4 flex gap-2">

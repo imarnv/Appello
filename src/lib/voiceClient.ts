@@ -10,6 +10,8 @@
  *   ← {type:"status"}      "listening" | "speaking"
  *   ← {type:"clear"}       barge-in: drop everything still queued
  *   ← {type:"rate"}        playback rate hint
+ *   ← {type:"payment_link"} a checkout URL to render, never to read aloud
+ *   ← {type:"payment"}      the provider settled it: paid, or not
  *   ← {type:"error"}
  *
  * Both directions are 24 kHz here. Gemini's own output is 24 kHz, so what it
@@ -25,9 +27,20 @@ const SAMPLE_RATE = 24000;
 /** ~40 ms of audio per frame. Small enough to keep barge-in responsive. */
 const FRAME_SAMPLES = 960;
 
+/** A checkout the agent opened during the call. */
+export type PaymentState = {
+  url: string;
+  amountRupees?: number;
+  expiresInMinutes?: number;
+  /** Settled only once the provider's webhook has been verified server-side. */
+  settled?: "paid" | "failed";
+};
+
 export type VoiceEvents = {
   onTranscript: (role: "user" | "assistant", text: string) => void;
   onStatus: (status: "listening" | "speaking") => void;
+  /** A payment link arrived, or an existing one settled. */
+  onPayment: (state: Partial<PaymentState>) => void;
   /** Playback amplitude 0..1, sampled per frame — drives the orb. */
   onLevel: (level: number) => void;
   onError: (message: string) => void;
@@ -219,6 +232,18 @@ export class VoiceCall {
         break;
       case "rate":
         this.rate = Number(msg.value) || 1;
+        break;
+      case "payment_link":
+        this.ev.onPayment({
+          url: String(msg.url ?? ""),
+          amountRupees: msg.amount_rupees as number | undefined,
+          expiresInMinutes: msg.expires_in_minutes as number | undefined,
+        });
+        break;
+      case "payment":
+        // The bridge only sends this after verifying the provider's signature
+        // and re-querying the order server-side, so it can be shown as final.
+        this.ev.onPayment({ settled: msg.paid ? "paid" : "failed" });
         break;
       case "error":
         this.ev.onError(String(msg.message ?? "Bridge error"));

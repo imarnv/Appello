@@ -22,6 +22,22 @@ def set_kb_engine(engine):
 def _get_kb_engine():
     return _kb_engine
 
+
+# Redis, for the payment tool: a checkout has to be findable again from the
+# webhook that confirms it, and the only thing the provider will quote back is
+# our own merchant_order_id.
+_redis = None
+
+
+def set_redis(client):
+    """Called once at startup, like set_kb_engine."""
+    global _redis
+    _redis = client
+
+
+def _get_redis():
+    return _redis
+
 # Per-scenario KB search shape. The default suits the small hand-curated
 # collections: the globally best 3 chunks.
 #
@@ -104,7 +120,35 @@ _QUERY_KB_TOOL = {
 
 # ─── Tool Schemas (Azure OpenAI Realtime function calling) ───────────────
 
+_PAYMENT_LINK_TOOL = {
+    "type": "function",
+    "name": "create_payment_link",
+    "description": (
+        "Create a secure payment link and give it to the customer. Call this ONLY "
+        "after the customer has agreed to pay and you have confirmed the amount "
+        "out loud. Never ask for card, UPI or account details yourself — the "
+        "customer enters those on the payment page, never on this call."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "amount": {
+                "type": "number",
+                "description": "Amount in rupees, as agreed with the customer.",
+            },
+            "description": {
+                "type": "string",
+                "description": "What the payment is for, e.g. 'EMI for March'.",
+            },
+        },
+        "required": ["amount", "description"],
+    },
+}
+
 SCENARIO_TOOLS: Dict[str, list] = {
+    "payment_followup": [
+        _PAYMENT_LINK_TOOL,
+    ],
     "restaurant_booking": [
         {
             "type": "function",
@@ -416,6 +460,89 @@ async def execute_tool(tool_name: str, args: dict, session_id: str, phone_number
                 "lead_name": lead_name,
                 "qualification_stage": qualification_stage,
                 "escalation_required": escalation_required,
+            })
+
+        elif tool_name == "create_payment_link":
+            # Nothing here ever sees a card number. We create a hosted checkout
+            # and hand back a URL; the customer pays on the provider's page.
+            import payments
+
+            if not payments.is_configured():
+                logger.warning("[tool] payment link requested but the gateway is not configured")
+                return json.dumps({
+                    "created": False,
+                    "reason": "unavailable",
+                    "message": (
+                        "The payment system is not available on this line right now. "
+                        "Tell the customer you will send the link separately, and do "
+                        "not ask them for any card or account details."
+                    ),
+                })
+
+            try:
+                amount = float(args.get("amount") or 0)
+            except (TypeError, ValueError):
+                amount = 0.0
+            if amount <= 0:
+                return json.dumps({
+                    "created": False,
+                    "reason": "invalid_amount",
+                    "message": "Confirm the amount with the customer and call again.",
+                })
+
+            try:
+                checkout = await payments.create_checkout(
+                    amount_rupees=amount,
+                    description=args.get("description") or "Payment",
+                    session_id=session_id,
+                )
+            except payments.PaymentUnavailable as e:
+                # A gateway fault is not a declined payment, and the agent must
+                # not tell the customer their payment failed.
+                logger.error(f"[tool] payment link failed: {e}")
+                return json.dumps({
+                    "created": False,
+                    "reason": "unavailable",
+                    "message": (
+                        "The payment system did not respond. Apologise, say you will "
+                        "send the link separately, and do not say the payment failed."
+                    ),
+                })
+
+            # The webhook arrives on a plain HTTP request that may land on a
+            # different worker, and all it can quote is merchant_order_id. This
+            # mapping is what lets the confirmation find the call it belongs to.
+            redis = _get_redis()
+            if redis is not None:
+                try:
+                    await redis.set_raw(
+                        f"pay:order:{checkout['merchant_order_id']}",
+                        json.dumps({
+                            "session_id": session_id,
+                            "phone_number": phone_number,
+                            "amount_rupees": amount,
+                        }),
+                        ttl=checkout["expires_in_s"] + 300,
+                    )
+                except Exception as e:
+                    logger.error(f"[tool] could not record the checkout mapping: {e}")
+
+            logger.info(
+                f"[tool] payment link {checkout['merchant_order_id']} "
+                f"for Rs {amount} on session {session_id}"
+            )
+            return json.dumps({
+                "created": True,
+                "checkout_url": checkout["checkout_url"],
+                "amount_rupees": amount,
+                "expires_in_minutes": checkout["expires_in_s"] // 60,
+                "message": (
+                    "The link is on its way to the customer. Tell them it is open, "
+                    "that it expires in about "
+                    f"{checkout['expires_in_s'] // 60} minutes, and stay on the line "
+                    "with them. Do NOT claim the payment has gone through — you will "
+                    "be told separately when it actually has."
+                ),
             })
 
         elif tool_name == "query_knowledge_base":

@@ -213,20 +213,23 @@ live in the same worker. A webhook is an inbound HTTP request that may land on a
 different worker entirely, so it has to reach the session over **real Redis
 pub/sub** rather than a local dict.
 
-### What exists, and what this adds
+### Where each piece lives
 
-| Piece | Status |
+All of it is code in this repository, on the payment-follow-up agent:
+
+| Piece | Where |
 | --- | --- |
-| Tool declared in the live session, model decides when to call | **Built** — four tools do this today |
-| `execute_tool` branch performing a real write mid-call | **Built** — reservations, pre-orders, lead capture |
-| Hiding a slow round trip behind speech | **Built** — the two-phase search pattern |
-| Injecting an external fact at a turn boundary | **Built** — used by voice handover |
-| Redis keyed state with TTL | **Built** — session cache and KB cache |
-| `create_payment_link` tool and its branch | New — one declaration, one branch |
-| Provider client: create link, deliver by SMS or WhatsApp | New — one adapter per provider |
-| `POST /webhooks/payments` with signature verification and idempotency | New — there are no webhook routes today |
-| Session channel over Redis pub/sub rather than an in-process dict | New — needed for cross-worker delivery |
-| Abandonment timeout and resend | New |
+| `create_payment_link`, declared to the model | `backend/tools.py` |
+| Provider adapter — OAuth, hosted checkout, order status | `backend/payments.py` |
+| Signed webhook, idempotent, re-checked server-side | `backend/main.py` → `POST /webhooks/phonepe` |
+| Session channel so a webhook on any worker reaches the call | `backend/redis_session.py` → `publish_event` / `subscribe_events` |
+| Confirmation folded in at a turn boundary | `backend/test_realtime_gemini.py` |
+| Checkout rendered as a link, never read aloud | `src/components/try/TrySection.tsx` |
+
+Each of these leans on something the bridge could already do: a tool declared in
+a live session, an `execute_tool` branch that writes mid-call, latency hidden
+behind speech, an external fact injected at a turn boundary, and Redis state with
+a TTL. The payment work is the adapter and the webhook; the rest was there.
 
 ### Deliberately out of scope
 
@@ -271,16 +274,23 @@ the part most people get wrong.
 
 ### Status
 
-**Not wired into the voice bridge in this build.** What is missing is the
-adapter between two things that both exist: a proven payment flow on one side,
-and a live tool-call seam on the other. The remaining work is the *New* rows in
-the table above — a tool declaration, an `execute_tool` branch, a webhook route
-on this service, and a Redis channel so the confirmation can reach a session
-that may be held by a different worker.
+**Implemented, and inert until credentials are set.** With `PHONEPE_CLIENT_ID`
+unset, `payments.is_configured()` returns false, the tool declines cleanly, and
+the agent tells the customer it will send the link separately rather than failing
+mid-sentence. Put sandbox credentials in `backend/.env` and the whole path runs
+end to end without moving real money.
 
-Live merchant credentials for this team sit with PhonePe. The provider is one
-adapter behind the interface, so a different gateway changes the create-link
-call and the signature check and nothing else.
+Two things the deployment needs beyond the keys: `PUBLIC_BASE_URL` has to point
+at a publicly reachable host, because the provider posts the webhook to it, and
+that URL has to be registered in the provider dashboard.
+
+Two rules are enforced in code rather than left to the prompt. The agent is told
+— in its system prompt, and again in every tool response — never to ask for a
+card number, CVV, OTP or UPI PIN, and it could not use them if it heard them,
+because nothing in the payment path accepts them. And a gateway fault raises
+`PaymentUnavailable`, deliberately distinct from a declined payment: an agent
+that says *"your payment failed"* because a token request timed out is worse than
+one that says nothing.
 
 ## How the documents get in
 
@@ -354,8 +364,8 @@ flowchart TB
         L6["transcripts, analytics,<br/>multi-tenant RLS"]
     end
 
-    subgraph Gap["Specified, not enabled"]
-        G1["payment capture<br/>waiting on merchant credentials"]
+    subgraph Gap["Built, not yet run on live traffic"]
+        G1["payment capture<br/>exercised on sandbox"]
         G2["self-serve document upload<br/>with progress"]
         G3["evaluation harness for<br/>answer correctness"]
     end
@@ -367,13 +377,13 @@ flowchart TB
         K4["single region: Sweden Central"]
     end
 
-    L4 -.->|"same seam, see Mid-call payments"| G1
+    L4 -.->|"same seam"| G1
     L2 -.->|"needs"| G3
 ```
 
 | Limit | Why, and what it would take |
 | --- | --- |
-| **Payments not enabled** | The flow is designed end to end and every mechanism it needs is already running here; no payment adapter is wired up yet. The provider sits behind a single adapter, so this is one integration rather than an architectural change. See *Mid-call payments*. |
+| **Payments run on sandbox** | The whole path is implemented — tool, adapter, signed webhook, server-side re-check, confirmation folded into the live call — and is inert until provider credentials are set. It has been exercised against sandbox, not live traffic. |
 | **Cold start** | Azure App Service B1 sleeps when idle, so the first call after a quiet period waits several seconds on the container. An always-on tier or a warming ping removes it. |
 | **Retrieval tuning is per-corpus** | The grouping and page-expansion settings that make the manuals work were chosen *for* the manuals. A new corpus needs its own pass; there is no automatic tuner. |
 | **Language set is per-agent** | The platform speaks many more than any one agent offers. The picker deliberately shows only the languages an agent has a real greeting and override for. |

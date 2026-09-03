@@ -418,7 +418,22 @@ Explain that the call is regarding the pending EMI of ₹5,000 for their Easy Lo
 ## Step 3: Understand Situation & Collect Commitment
 - Ask if they require any assistance or when they plan to make the payment.
 - Get the expected date/time of payment.
-- Offer options like sending a payment link via WhatsApp.
+- Offer to send a secure payment link.
+
+# TAKING PAYMENT (TOOL USE)
+- When the customer agrees to pay now, say the amount out loud and get their
+  agreement to it, THEN call `create_payment_link` with that amount.
+- NEVER ask for a card number, CVV, expiry, UPI PIN, OTP or bank details. You
+  cannot take them and must not hear them. The customer enters everything on the
+  payment page. If they start reading a card number, stop them politely.
+- After the tool returns, tell them the link is with them and roughly how long it
+  is valid. Stay on the line and keep them company — small talk, a recap of the
+  amount — rather than going silent.
+- Do NOT say the payment has succeeded. You will be told separately, by the
+  system, once the provider has actually confirmed it. Only then do you
+  acknowledge it.
+- If the tool reports the payment system is unavailable, apologise, say you will
+  send the link separately, and do not say their payment failed.
 
 ## Step 4: Closing
 - Confirm the commitment and thank them.
@@ -612,6 +627,48 @@ async def _close_quietly(sock):
         await sock.close()
     except Exception:
         pass
+
+
+def _to_gemini_schema(node: Any) -> Any:
+    """Translate a JSON-Schema fragment into the shape Gemini Live expects.
+
+    The tool schemas in tools.py were written for the Azure Realtime API, which
+    takes lowercase JSON-Schema type names. Gemini wants them uppercased. Rather
+    than keeping two copies of every schema in step, the difference is converted
+    here — one place, and the schemas stay single-sourced.
+    """
+    if isinstance(node, dict):
+        out = {}
+        for k, v in node.items():
+            if k == "type" and isinstance(v, str):
+                out[k] = v.upper()
+            else:
+                out[k] = _to_gemini_schema(v)
+        return out
+    if isinstance(node, list):
+        return [_to_gemini_schema(v) for v in node]
+    return node
+
+
+def gemini_tool_declarations(scenario_key: str) -> list:
+    """Function declarations for a scenario, or [] when it has none.
+
+    The two support desks are handled separately, because their two-phase search
+    tools are not in SCENARIO_TOOLS — they exist only on this pipeline.
+    """
+    declarations = []
+    for tool in SCENARIO_TOOLS.get(scenario_key, []):
+        name = tool.get("name")
+        if not name:
+            continue
+        declarations.append({
+            "name": name,
+            "description": tool.get("description", ""),
+            "parameters": _to_gemini_schema(
+                tool.get("parameters") or {"type": "OBJECT", "properties": {}}
+            ),
+        })
+    return declarations
 
 
 def downsample_24k_to_16k(pcm_data: bytes) -> bytes:
@@ -1021,6 +1078,9 @@ async def voice_pipeline(ws: WebSocket):
     current_voice = [voice_name]            # mutable so nested scopes can swap it
     swaps_done = 0
     greeting_done = False
+    # A payment confirmation arrives from outside the conversation, at a moment
+    # nobody chose. It is parked here and spoken at the next turn boundary.
+    pending_payment: Optional[Dict[str, Any]] = None
 
     # Voice switching is consent-gated: detecting a mismatched voice only
     # *offers* the switch. "idle" → "queued" (offer due) → "asked" (waiting for
@@ -1119,10 +1179,58 @@ async def voice_pipeline(ws: WebSocket):
         finally:
             client_closed.set()
 
+    async def payment_events():
+        """Listen for payment confirmations arriving from the webhook.
+
+        The webhook is an inbound HTTP request that may be handled by a
+        different worker entirely, so Redis pub/sub is the only thing that can
+        carry it to the worker holding this websocket. The browser is told
+        immediately — it can render the change straight away — while the agent
+        waits for a turn boundary so it never talks over the caller.
+        """
+        pubsub = redis_cache.subscribe_events(session_id)
+        if pubsub is None:
+            return
+        nonlocal pending_payment
+        channel = redis_cache.event_channel(session_id)
+        try:
+            await pubsub.subscribe(channel)
+            async for message in pubsub.listen():
+                if not message or message.get("type") != "message":
+                    continue
+                try:
+                    event = json.loads(message["data"])
+                except Exception:
+                    continue
+                if event.get("type") != "payment":
+                    continue
+                pending_payment = event
+                try:
+                    await ws.send_json({
+                        "type": "payment",
+                        "state": event.get("state"),
+                        "paid": bool(event.get("paid")),
+                        "amount_rupees": event.get("amount_rupees"),
+                    })
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[payments] event listener stopped: {e}")
+        finally:
+            try:
+                await pubsub.unsubscribe(channel)
+                await pubsub.close()
+            except Exception:
+                pass
+
     browser_task: Optional[asyncio.Task] = None
+    payment_task: Optional[asyncio.Task] = None
 
     try:
         browser_task = asyncio.create_task(browser_to_gemini())
+        payment_task = asyncio.create_task(payment_events())
         generation = 0
 
         while not client_closed.is_set():
@@ -1168,6 +1276,29 @@ async def voice_pipeline(ws: WebSocket):
                     }
                 }
             }
+
+                # Every other scenario declares whatever SCENARIO_TOOLS gives
+                # it. Without this the model is never told its tools exist, so a
+                # booking or a payment link can be agreed out loud and then
+                # silently never happen.
+                # The support desks are excluded: their two-phase search tools
+                # replace the generic set below, and offering both would let the
+                # model reach the knowledge base without the filler that hides
+                # the latency.
+                scenario_declarations = (
+                    []
+                    if scenario_key in ("fsecure_support", "ggs_support")
+                    else gemini_tool_declarations(scenario_key)
+                )
+                if scenario_declarations:
+                    setup_message["setup"]["tools"] = [
+                        {"functionDeclarations": scenario_declarations}
+                    ]
+                    logger.info(
+                        f"[gemini-live] Declared {len(scenario_declarations)} tool(s) "
+                        f"for scenario '{scenario_key}': "
+                        f"{[d['name'] for d in scenario_declarations]}"
+                    )
 
                 # Add two-phase tool declarations for deferred KB search
                 if scenario_key in ("fsecure_support", "ggs_support"):
@@ -1314,7 +1445,7 @@ async def voice_pipeline(ws: WebSocket):
                 async def gemini_recv():
                     """Listen to Gemini Live WebSocket and forward audio/transcripts to browser."""
                     nonlocal is_speaking, pending_search_task, phase1_response_time
-                    nonlocal swaps_done, greeting_done
+                    nonlocal swaps_done, greeting_done, pending_payment
                     nonlocal offer_state, offer_voice, resume_with_ack, agent_name
                     nonlocal last_kb_context
 
@@ -1408,6 +1539,41 @@ async def voice_pipeline(ws: WebSocket):
                                     # stalls the turn. turn_complete=False so it folds
                                     # into the next reply rather than being its own
                                     # utterance, and never cuts the customer off.
+                                    # ── A payment settled while we were talking ──
+                                    # Same constraint as the voice offer below:
+                                    # injecting mid-audio stalls the turn, so it
+                                    # waits for the boundary. turn_complete=False
+                                    # folds it into the next reply instead of
+                                    # making it a separate utterance.
+                                    if pending_payment is not None:
+                                        pay = pending_payment
+                                        pending_payment = None
+                                        if pay.get("paid"):
+                                            directive = (
+                                                "SYSTEM FACT — the payment you asked the customer for has "
+                                                "just been confirmed by the payment provider"
+                                                + (f" (Rs {pay['amount_rupees']:.0f})" if pay.get("amount_rupees") else "")
+                                                + ". Acknowledge it warmly in one short sentence, tell them a "
+                                                "receipt is on its way, and carry on. Do not ask them to pay again."
+                                            )
+                                        else:
+                                            directive = (
+                                                "SYSTEM FACT — the payment did not go through (provider state: "
+                                                f"{pay.get('state', 'unknown')}). Tell the customer gently, do not "
+                                                "blame them, and offer to send a fresh link. Never ask them for "
+                                                "card or account details on this call."
+                                            )
+                                        await gemini_ws.send(json.dumps({
+                                            "client_content": {
+                                                "turns": [{"role": "user", "parts": [{"text": directive}]}],
+                                                "turn_complete": False,
+                                            }
+                                        }))
+                                        logger.info(
+                                            f"[payments] folded {pay.get('state')} into the next reply "
+                                            f"for session {session_id}"
+                                        )
+
                                     if offer_state == "queued" and greeting_done:
                                         await gemini_ws.send(json.dumps({
                                             "client_content": {
@@ -1644,6 +1810,24 @@ async def voice_pipeline(ws: WebSocket):
                                             logger.error(f"[gemini-live] Tool execution error: {e}")
                                             result = json.dumps({"error": str(e)})
 
+                                        # A checkout URL is not something anyone
+                                        # should have read out to them digit by
+                                        # digit. Push it to the browser so the
+                                        # panel can render it as a link, while
+                                        # the agent just says it has arrived.
+                                        if fn_name == "create_payment_link":
+                                            try:
+                                                payload = json.loads(result)
+                                                if payload.get("created"):
+                                                    await ws.send_json({
+                                                        "type": "payment_link",
+                                                        "url": payload["checkout_url"],
+                                                        "amount_rupees": payload.get("amount_rupees"),
+                                                        "expires_in_minutes": payload.get("expires_in_minutes"),
+                                                    })
+                                            except Exception as e:
+                                                logger.error(f"[payments] could not push the link to the browser: {e}")
+
                                         function_responses.append({
                                             "id": fn_id,
                                             "name": fn_name,
@@ -1739,6 +1923,10 @@ async def voice_pipeline(ws: WebSocket):
     finally:
         if browser_task is not None and not browser_task.done():
             browser_task.cancel()
+        # The pubsub listener blocks forever on its own; without this the
+        # subscription outlives the call it belongs to.
+        if payment_task is not None and not payment_task.done():
+            payment_task.cancel()
         await db_store.log_call_end(session_id, tenant_id=tenant_id)
         # The billable event. record_usage swallows its own errors, so a usage
         # write can never be the reason a call teardown fails.

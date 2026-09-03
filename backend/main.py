@@ -352,10 +352,11 @@ async def startup():
     # Initialize KBEngine (Qdrant RAG)
     try:
         from kb_engine import KBEngine
-        from tools import set_kb_engine
+        from tools import set_kb_engine, set_redis
         kb_engine = KBEngine(redis_cache)
         await kb_engine.initialize()
         set_kb_engine(kb_engine)
+        set_redis(redis_cache)
         api_routes._kb_engine = kb_engine
         logger.info("[startup] KBEngine initialized and registered successfully.")
     except Exception as e:
@@ -411,6 +412,107 @@ async def ws_voice_gemini(ws: WebSocket):
     """
     from test_realtime_gemini import voice_pipeline as gemini_voice_pipeline
     await gemini_voice_pipeline(ws)
+
+# ─── Payment webhook ─────────────────────────────────────────────────────
+@app.post("/webhooks/phonepe")
+async def phonepe_webhook(request: Request):
+    """Server-to-server payment notification.
+
+    This is the only signal trusted to move a payment to confirmed. It is
+    verified twice over: the X-VERIFY signature proves the message came from the
+    provider, and `order_status` re-asks the provider what the order's state
+    actually is — because a signed message still only tells us what the provider
+    *sent*, and re-querying is what closes the gap on a replayed or stale one.
+
+    Always answers 200 once the signature checks out. A webhook is a delivery
+    mechanism with retries: returning 5xx because our own session lookup failed
+    would have the provider redeliver a message we already understood.
+    """
+    import payments
+
+    raw = await request.body()
+    try:
+        body = json.loads(raw.decode("utf-8") or "{}")
+    except Exception:
+        return {"ok": False, "error": "malformed body"}
+
+    encoded = body.get("response")
+    if not encoded:
+        return {"ok": False, "error": "missing response payload"}
+
+    if not payments.verify_webhook(request.headers.get("x-verify", ""), encoded):
+        logger.warning("[payments] webhook rejected: bad signature")
+        # 401 rather than 200: this one really is worth retrying, and worth
+        # showing up in the provider's dashboard as a failure.
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": "invalid signature"}, status_code=401)
+
+    try:
+        decoded = payments.decode_webhook(encoded)
+    except Exception as e:
+        logger.error(f"[payments] webhook payload could not be decoded: {e}")
+        return {"ok": False, "error": "undecodable payload"}
+
+    data = decoded.get("data") or decoded
+    order_id = (
+        data.get("merchantOrderId")
+        or data.get("merchantTransactionId")
+        or data.get("orderId")
+    )
+    if not order_id:
+        return {"ok": False, "error": "no order id"}
+
+    # Which call asked for this? Written when the link was created.
+    mapping = None
+    try:
+        cached = await redis_cache.get_raw(f"pay:order:{order_id}")
+        if cached:
+            mapping = json.loads(cached)
+    except Exception as e:
+        logger.error(f"[payments] could not read the checkout mapping: {e}")
+
+    # Idempotency: the provider retries, and a caller must not be thanked twice.
+    try:
+        already = await redis_cache.get_raw(f"pay:done:{order_id}")
+        if already:
+            logger.info(f"[payments] webhook for {order_id} already handled")
+            return {"ok": True, "duplicate": True}
+    except Exception:
+        pass
+
+    # The signature proves provenance; this proves state.
+    try:
+        status = await payments.order_status(order_id)
+        paid = status["paid"]
+        state = status["state"]
+    except payments.PaymentUnavailable as e:
+        logger.error(f"[payments] status re-check failed for {order_id}: {e}")
+        return {"ok": False, "error": "status check failed"}
+
+    try:
+        await redis_cache.set_raw(f"pay:done:{order_id}", state, ttl=86400)
+    except Exception:
+        pass
+
+    if mapping and mapping.get("session_id"):
+        delivered = await redis_cache.publish_event(
+            mapping["session_id"],
+            {
+                "type": "payment",
+                "state": state,
+                "paid": paid,
+                "order_id": order_id,
+                "amount_rupees": mapping.get("amount_rupees"),
+            },
+        )
+        logger.info(
+            f"[payments] {order_id} -> {state}; delivered to {delivered} live session(s)"
+        )
+    else:
+        logger.info(f"[payments] {order_id} -> {state}; no live session to notify")
+
+    return {"ok": True, "state": state}
+
 
 @app.websocket("/ws/voice")
 async def voice_pipeline(ws: WebSocket):

@@ -10,7 +10,12 @@ import {
   type Vertical,
 } from "@/lib/verticals";
 import { scene } from "@/lib/sceneState";
-import { VoiceCall, bridgeUrl, checkBridge } from "@/lib/voiceClient";
+import {
+  VoiceCall,
+  bridgeUrl,
+  checkBridge,
+  type PaymentState,
+} from "@/lib/voiceClient";
 
 export type CallStatus = "idle" | "ringing" | "live" | "ended";
 export type CallMode = "live" | "scripted";
@@ -39,6 +44,7 @@ export function useCall(vertical: Vertical, option: CallOption) {
   const [latency, setLatency] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [bridge, setBridge] = useState<BridgeState>("checking");
+  const [payment, setPayment] = useState<PaymentState | null>(null);
 
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const raf = useRef(0);
@@ -69,6 +75,7 @@ export function useCall(vertical: Vertical, option: CallOption) {
     setElapsed(0);
     setLatency(null);
     setNotice(null);
+    setPayment(null);
   }
 
   // Timers, the socket and the 3D field are outside React, so they are
@@ -157,6 +164,7 @@ export function useCall(vertical: Vertical, option: CallOption) {
       setElapsed(0);
       setLatency(null);
       setNotice(null);
+      setPayment(null);
       setMode("live");
       setStatus("ringing");
 
@@ -200,6 +208,16 @@ export function useCall(vertical: Vertical, option: CallOption) {
           onLevel: (level) => {
             scene.energy = 0.3 + level * 0.7;
           },
+          onPayment: (update) =>
+            setPayment((prev) =>
+              // A settlement carries no URL, so it merges onto the link that
+              // opened it rather than replacing it.
+              update.url
+                ? { ...(prev ?? {}), ...update, url: update.url }
+                : prev
+                  ? { ...prev, ...update }
+                  : null,
+            ),
           onError: (message) => setNotice(message),
           onClose: () => {
             setStatus("ended");
@@ -288,6 +306,7 @@ export function useCall(vertical: Vertical, option: CallOption) {
     setElapsed(0);
     setLatency(null);
     setNotice(null);
+    setPayment(null);
     scene.energy = 0.3;
     scene.turn = 1;
   }, [clearAll]);
@@ -302,6 +321,7 @@ export function useCall(vertical: Vertical, option: CallOption) {
     mode,
     bridge,
     notice,
+    payment,
     playRecording,
     turns,
     elapsed,

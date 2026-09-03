@@ -116,6 +116,42 @@ class RedisSessionManager:
         except Exception as e:
             logger.error(f"[redis] Error in set_raw: {e}")
 
+    # ── Session events ────────────────────────────────────────────────
+    # Transcript fan-out uses an in-process dict, which is fine because the
+    # websocket and its readers share a worker. A payment webhook does not: it
+    # is an inbound HTTP request that can land anywhere, so it has to reach the
+    # session over real pub/sub.
+
+    @staticmethod
+    def event_channel(session_id: str) -> str:
+        return f"appello:session:{session_id}:events"
+
+    async def publish_event(self, session_id: str, event: Dict[str, Any]) -> int:
+        """Publish one event to whichever worker is holding this session.
+
+        Returns the number of subscribers that received it — zero means the call
+        has already ended, which is normal and not an error.
+        """
+        if not self.client:
+            return 0
+        try:
+            return await self.client.publish(
+                self.event_channel(session_id), json.dumps(event)
+            )
+        except Exception as e:
+            logger.error(f"[redis] could not publish session event: {e}")
+            return 0
+
+    def subscribe_events(self, session_id: str):
+        """A pubsub handle for this session, or None when Redis is unavailable.
+
+        The caller owns it and must unsubscribe; it is deliberately not an async
+        context manager, because the websocket's lifetime is what governs it.
+        """
+        if not self.client:
+            return None
+        return self.client.pubsub(ignore_subscribe_messages=True)
+
     async def clear_kb_cache(self, agent_type: str):
         """Clear all cached KB queries for an agent."""
         try:
