@@ -77,6 +77,12 @@ export type Vertical = {
   options: CallOption[];
   /** The knowledge the agent answers from */
   sources: string[];
+  /**
+   * A capability this agent has in the codebase that the hosted demo does not
+   * run. Rendered under the sources row and always says so explicitly — an
+   * unlabelled mention would read as a promise the live call cannot keep.
+   */
+  note?: { label: string; body: string };
   turns: Turn[];
 };
 
@@ -351,6 +357,16 @@ export const VERTICALS: Vertical[] = [
       { code: "te-IN" },
     ],
     sources: ["LOAN & EMI KNOWLEDGE", "Payment Methods", "Tenure & Schedule"],
+    note: {
+      label: "Mid-call checkout · built, not enabled here",
+      body:
+        "This agent can open a PhonePe checkout during the call: it calls " +
+        "create_payment_link, the link appears in this panel rather than being " +
+        "read out, and the confirmation is only believed once a signed webhook " +
+        "has been verified and the order re-queried server-side. Nothing in the " +
+        "path accepts a card number. It is implemented in backend/payments.py " +
+        "and switched off on this hosted demo, which has no merchant credentials.",
+    },
     turns: [
       { who: "agent", text: "", latency: 180 },
       { who: "caller", text: "Yes, this is Arnav." },

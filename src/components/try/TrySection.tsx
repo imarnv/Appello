@@ -340,6 +340,20 @@ export default function TrySection() {
               </span>
             ))}
           </div>
+
+          {/* A capability that exists in the codebase but not on this deploy.
+              The label carries that caveat, so it can never be mistaken for
+              something the call you just made was able to do. */}
+          {vertical.note && (
+            <div className="mt-6 max-w-[62ch] border-l-2 border-hairline pl-4">
+              <p className="type-meta text-[0.5625rem] text-ink-3">
+                {vertical.note.label}
+              </p>
+              <p className="mt-1.5 text-[0.875rem] leading-relaxed text-ink-2">
+                {vertical.note.body}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </section>
