@@ -360,12 +360,12 @@ export const VERTICALS: Vertical[] = [
     note: {
       label: "Mid-call checkout · built, not enabled here",
       body:
-        "This agent can open a PhonePe checkout during the call: it calls " +
-        "create_payment_link, the link appears in this panel rather than being " +
-        "read out, and the confirmation is only believed once a signed webhook " +
-        "has been verified and the order re-queried server-side. Nothing in the " +
-        "path accepts a card number. It is implemented in backend/payments.py " +
-        "and switched off on this hosted demo, which has no merchant credentials.",
+        "Opens a PhonePe checkout during the call — the link lands in this " +
+        "panel rather than being read out, and is only treated as paid once a " +
+        "signed webhook has been verified and the order re-queried server-side. " +
+        "Nothing in the path accepts a card number. Implemented in " +
+        "backend/payments.py; off on this hosted demo, which holds no merchant " +
+        "credentials.",
     },
     turns: [
       { who: "agent", text: "", latency: 180 },

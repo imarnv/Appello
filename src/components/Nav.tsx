@@ -121,12 +121,6 @@ export default function Nav() {
           </button>
           <a
             href="#try"
-            className="hidden text-[0.875rem] text-ink-2 transition-colors duration-200 hover:text-ink sm:block"
-          >
-            Sign in
-          </a>
-          <a
-            href="#try"
             className="group relative inline-flex h-9 items-center rounded-full bg-ink px-4 text-[0.8125rem] font-medium text-white transition-transform duration-200 hover:scale-[1.03] active:scale-[0.98]"
           >
             Talk to an agent
@@ -151,15 +145,6 @@ export default function Nav() {
                 </a>
               </li>
             ))}
-            <li>
-              <a
-                href="#try"
-                onClick={() => setOpen(false)}
-                className="block py-2.5 text-[0.9375rem] text-ink-2 transition-colors duration-200 hover:text-ink"
-              >
-                Sign in
-              </a>
-            </li>
           </ul>
         </div>
       )}
