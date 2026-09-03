@@ -358,14 +358,10 @@ export const VERTICALS: Vertical[] = [
     ],
     sources: ["LOAN & EMI KNOWLEDGE", "Payment Methods", "Tenure & Schedule"],
     note: {
-      label: "Mid-call checkout · built, not enabled here",
+      label: "Mid-call checkout · not enabled here",
       body:
-        "Opens a PhonePe checkout during the call — the link lands in this " +
-        "panel rather than being read out, and is only treated as paid once a " +
-        "signed webhook has been verified and the order re-queried server-side. " +
-        "Nothing in the path accepts a card number. Implemented in " +
-        "backend/payments.py; off on this hosted demo, which holds no merchant " +
-        "credentials.",
+        "PhonePe, opened mid-call and confirmed from a signed webhook. " +
+        "In backend/payments.py — off on this demo.",
     },
     turns: [
       { who: "agent", text: "", latency: 180 },
