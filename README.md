@@ -109,35 +109,157 @@ Four of these are live today — `check_table_availability`, `reserve_table`,
 `pre_order_food` and `record_lead_qualification` — and every one writes to
 Postgres during the call.
 
-**Mid-call transactions sit on exactly this seam.** A payment step is the same
-three pieces: a declared tool, a branch in `execute_tool`, and a call out to the
-provider instead of to Postgres.
+## Mid-call payments
+
+A payment is not just one more tool call, and it is worth being precise about
+why: the call is **synchronous** and the payment is **asynchronous**. The agent
+asks, the caller leaves to pay on somebody else's checkout page, and the answer
+comes back minutes later through a completely different channel. The agent has
+to stay useful across that gap and then react to an event that arrives from
+outside the conversation.
+
+### The full path
 
 ```mermaid
-flowchart LR
-    subgraph Built["Already built"]
-        T1["tool declared<br/>in the Live session"] --> T2["model decides<br/>when to call it"]
-        T2 --> T3["execute_tool branch"]
-        T3 --> T4["write to Postgres"]
-        T4 --> T5["agent speaks the result"]
-        F["two-phase pattern<br/>hides a slow round trip<br/>behind speech"] -.-> T3
+sequenceDiagram
+    autonumber
+    participant C as Caller
+    participant GL as Gemini Live
+    participant BR as Bridge
+    participant PP as Payment provider
+    participant CO as Hosted checkout
+
+    Note over C,GL: caller agrees to pay
+    GL-->>BR: toolCall create_payment_link(amount, purpose)
+    BR->>PP: create payment link (amount, reference, callback)
+    PP-->>BR: checkout URL + order id
+    BR->>BR: Redis: order_id to session_id and call_sid, 15 min TTL
+    BR-->>GL: tool response with the link
+    GL-->>C: "I've sent you a secure link, take your time"
+
+    alt web call
+        BR-->>CO: page opens the provider's checkout in the browser
+    else phone call
+        BR->>PP: deliver the URL by SMS or WhatsApp
+        PP-->>C: link on the caller's phone
     end
 
-    subgraph Todo["What a payment step adds"]
-        N1["one more tool declaration"]
-        N2["one more execute_tool branch"]
-        N3["call the payment provider<br/>instead of Postgres"]
+    C->>CO: pays - card details never touch the agent or the bridge
+    CO-->>PP: authorised
+
+    par fast but untrusted
+        CO-->>BR: SDK handler posts payment id, order id, signature
+    and slow but authoritative
+        PP-->>BR: signed webhook: payment captured
     end
 
-    T3 -.-> N2
-    N1 --> N2 --> N3
+    BR->>BR: verify HMAC, dedupe on payment_id, reconcile order_id
+    BR->>BR: publish "captured" on the session's Redis channel
+    BR->>GL: client_content at the next turn boundary, turn_complete false
+    GL-->>C: "That's gone through - receipt is on its way"
 ```
 
-The hard parts are already solved: the model reliably decides when to call, the
-write lands mid-call, and the two-phase pattern above is proven at hiding a slow
-round trip behind speech — which is exactly what a payment authorisation needs.
-**No payment or funds-movement tool is wired up today**; what exists is the
-mechanism it would plug into.
+### Why two signals, and which one is the truth
+
+The browser SDK's handler fires the instant the checkout closes, which is fast
+and feels immediate — but it runs on the caller's machine and can be forged or
+simply never fire, because they closed the tab. The webhook is signed by the
+provider and is the only thing worth trusting, but it can lag by seconds.
+
+So the two are used for different jobs. The SDK callback is a *hint* that lets
+the agent start talking — *"looks like that's gone through, let me just
+confirm"* — and the webhook is what actually settles it. If the webhook never
+arrives, or contradicts, the agent corrects itself rather than having confirmed
+a payment that did not happen. Confirming from the SDK callback alone is the
+classic way to hand out goods for free.
+
+### Keeping the caller company while it settles
+
+Silence during a payment is worse than silence during a search, because the
+caller is anxious and cannot see what the agent can see.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Offered: agent sends the link
+    Offered --> Waiting: caller opens checkout
+    Waiting --> Waiting: small talk, order recap,<br/>"still with you"
+    Waiting --> Settling: SDK callback - hint only
+    Settling --> Confirmed: webhook payment.captured, signature valid
+    Waiting --> Confirmed: webhook arrives with no SDK callback
+    Settling --> Failed: webhook says failed, or contradicts
+    Waiting --> Failed: webhook payment.failed
+    Waiting --> Abandoned: 15 min TTL expires
+    Abandoned --> Offered: agent offers to resend
+    Confirmed --> [*]
+    Failed --> Offered: agent offers to retry
+```
+
+The waiting state is the same problem the two-phase search already solves, one
+size larger: the agent has something to say that is not silence, and the
+external result folds into the conversation when it lands.
+
+### Where the event enters the live session
+
+This is the part with a real constraint, and the codebase already ran into it
+for a different feature. A Gemini Live session cannot simply be interrupted:
+pushing `client_content` mid-audio stalls the turn. The existing voice-handover
+code injects at a **turn boundary** with `turn_complete: false`, so the new fact
+folds into the agent's next reply instead of becoming its own utterance and
+cutting the caller off. A payment confirmation takes exactly that path.
+
+One thing genuinely has to change. Transcript fan-out today uses an in-process
+dictionary of subscribers, which is fine because the websocket and its readers
+live in the same worker. A webhook is an inbound HTTP request that may land on a
+different worker entirely, so it has to reach the session over **real Redis
+pub/sub** rather than a local dict.
+
+### What exists, and what this adds
+
+| Piece | Status |
+| --- | --- |
+| Tool declared in the live session, model decides when to call | **Built** — four tools do this today |
+| `execute_tool` branch performing a real write mid-call | **Built** — reservations, pre-orders, lead capture |
+| Hiding a slow round trip behind speech | **Built** — the two-phase search pattern |
+| Injecting an external fact at a turn boundary | **Built** — used by voice handover |
+| Redis keyed state with TTL | **Built** — session cache and KB cache |
+| `create_payment_link` tool and its branch | New — one declaration, one branch |
+| Provider client: create link, deliver by SMS or WhatsApp | New — one adapter per provider |
+| `POST /webhooks/payments` with signature verification and idempotency | New — there are no webhook routes today |
+| Session channel over Redis pub/sub rather than an in-process dict | New — needed for cross-worker delivery |
+| Abandonment timeout and resend | New |
+
+### Deliberately out of scope
+
+The agent never hears, handles or stores card details. Payment happens on the
+provider's hosted checkout, which keeps card data off this service entirely and
+keeps PCI scope where it belongs. An agent that reads a card number back to
+confirm it would be a liability, not a feature.
+
+### Provider-agnostic by design
+
+Nothing above is specific to one payment provider. Every gateway in this market
+exposes the same four things — create a payment link or order, host the
+checkout, fire a client-side callback, and post a signed server-side webhook —
+so the provider sits behind a single adapter. Swapping PhonePe for Razorpay, or
+running both, changes the adapter and the signature-verification routine and
+touches nothing else: not the tool declaration, not the waiting state machine,
+not the way the confirmation enters the live session.
+
+That matters more than it sounds. The parts that are hard to get right — not
+confirming from an untrusted client callback, surviving a webhook that arrives
+after the caller has stopped talking, injecting a fact into a live session
+without cutting the caller off — are provider-independent, and they are the
+parts already proven in this codebase.
+
+### Status
+
+**Not enabled in this build.** The flow is specified end to end and every
+mechanism it leans on is already running here, but no payment adapter is wired
+up yet. Live merchant credentials for this project sit with **PhonePe**; the
+Razorpay path is the same adapter against a different endpoint and signing
+scheme.
+
+Everything on the *New* rows above is the remaining work.
 
 ## How the documents get in
 
@@ -211,8 +333,8 @@ flowchart TB
         L6["transcripts, analytics,<br/>multi-tenant RLS"]
     end
 
-    subgraph Gap["Not built yet"]
-        G1["payment / funds movement"]
+    subgraph Gap["Specified, not enabled"]
+        G1["payment capture<br/>waiting on merchant credentials"]
         G2["self-serve document upload<br/>with progress"]
         G3["evaluation harness for<br/>answer correctness"]
     end
@@ -224,12 +346,13 @@ flowchart TB
         K4["single region: Sweden Central"]
     end
 
-    L4 -.->|"same seam"| G1
+    L4 -.->|"same seam, see Mid-call payments"| G1
     L2 -.->|"needs"| G3
 ```
 
 | Limit | Why, and what it would take |
 | --- | --- |
+| **Payments not enabled** | The flow is designed end to end and every mechanism it needs is already running here; no payment adapter is wired up yet. The provider sits behind a single adapter, so this is one integration rather than an architectural change. See *Mid-call payments*. |
 | **Cold start** | Azure App Service B1 sleeps when idle, so the first call after a quiet period waits several seconds on the container. An always-on tier or a warming ping removes it. |
 | **Retrieval tuning is per-corpus** | The grouping and page-expansion settings that make the manuals work were chosen *for* the manuals. A new corpus needs its own pass; there is no automatic tuner. |
 | **Language set is per-agent** | The platform speaks many more than any one agent offers. The picker deliberately shows only the languages an agent has a real greeting and override for. |
