@@ -69,3 +69,7 @@ id_rsa*
 *.zip
 *.jsonl
 qdrant_storage/
+
+# local agent tooling — not part of the project
+.claude/
+CLAUDE.md
