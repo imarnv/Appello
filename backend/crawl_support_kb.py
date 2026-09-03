@@ -18,9 +18,11 @@ import time
 from playwright.async_api import async_playwright
 
 
-BASE_URL = "https://www.kb.f-secure.com"
-ALL_ARTICLES_URL = f"{BASE_URL}/s/topic/0TOTs0000000TwTOAU/all-articles?language=en_US"
-OUTPUT_CSV = os.path.join(os.path.dirname(__file__), "fsecure_kb.csv")
+BASE_URL = os.getenv("SUPPORT_KB_BASE_URL", "")
+# Listing page that holds every article. Portal-specific, so it is
+# configuration rather than a constant.
+ALL_ARTICLES_URL = os.getenv("SUPPORT_KB_ARTICLES_URL", "")
+OUTPUT_CSV = os.path.join(os.path.dirname(__file__), "support_kb.csv")
 MAX_ARTICLES = 75
 
 
@@ -160,7 +162,7 @@ async def scrape_article(page, url: str, title: str) -> dict:
 
 async def crawl():
     """Main crawler: fetch article list, scrape each article, save to CSV."""
-    print(f"🕷  F-Secure KB Crawler (max {MAX_ARTICLES} articles)")
+    print(f"🕷  Support KB crawler (max {MAX_ARTICLES} articles)")
     print(f"   Target: {ALL_ARTICLES_URL}")
     print(f"   Output: {OUTPUT_CSV}\n")
 
@@ -231,7 +233,7 @@ async def ingest_to_qdrant():
     with open(OUTPUT_CSV, "rb") as f:
         csv_data = f.read()
 
-    result = await kb.ingest_csv(csv_data, "fsecure_kb.csv", "fsecure_support")
+    result = await kb.ingest_csv(csv_data, "support_kb.csv", "fsecure_support")
     print(f"   Chunks parsed: {result['chunks']}")
     print(f"   Rows processed: {result['rows']}")
 
@@ -248,7 +250,7 @@ async def ingest_to_qdrant():
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="F-Secure KB Crawler & Qdrant Ingestor")
+    parser = argparse.ArgumentParser(description="Support KB crawler and Qdrant ingestor")
     parser.add_argument("--ingest-only", action="store_true", help="Skip crawling, only ingest existing CSV into Qdrant")
     parser.add_argument("--crawl-only", action="store_true", help="Only crawl and save CSV, don't ingest")
     args = parser.parse_args()

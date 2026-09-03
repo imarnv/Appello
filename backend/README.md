@@ -9,18 +9,42 @@ Everything the marketing site demonstrates is served from this directory. The
 "Document search" agent on the site is `ggs_support` below, and its answers come
 out of a live Qdrant collection of 5,753 passages, not out of a script.
 
+```mermaid
+flowchart LR
+    subgraph Callers
+        B["Browser mic<br/>24 kHz PCM16"]
+        P["Phone line via Exotel<br/>8 kHz PCM16"]
+    end
+
+    subgraph Azure["Azure App Service - one exposed port"]
+        M["main.py :8000<br/>REST + WebSocket"]
+        G["Gemini Live pipeline<br/>imported, not exposed"]
+        M -- "delegates /ws/voice-gemini" --> G
+    end
+
+    subgraph Google
+        GL["Gemini Live API<br/>BidiGenerateContent"]
+    end
+
+    subgraph State
+        Q[("Qdrant<br/>vector KB")]
+        PG[("Postgres<br/>transcripts, leads")]
+        R[("Redis<br/>session + cache")]
+    end
+
+    B --> M
+    P --> M
+    G <-- "16 kHz up / 24 kHz down" --> GL
+    GL -- "tool call" --> G
+    G --> Q
+    G --> PG
+    G --> R
+    G -- "audio + transcript" --> B
 ```
-browser mic ──24 kHz PCM16──┐
-                            ├── /ws/voice-gemini ──► Gemini Live (BidiGenerateContent)
-SIP (Exotel) ──8 kHz PCM16──┘         │                       │
-                                      │                  tool calls
-                                      │                       ▼
-                                      │              Qdrant (vector KB)
-                                      │              Postgres (transcripts, leads)
-                                      │              Redis (session cache)
-                                      ▼
-                          transcript + audio back to the caller
-```
+
+Two callers, one pipeline. The browser streams 24 kHz and hears 24 kHz back;
+the phone path resamples at both ends. Everything the agent says that is a fact
+about a document came out of Qdrant during the call.
 
 ---
 
@@ -151,6 +175,37 @@ The retrieval cost is spent underneath the filler, so the caller never hears the
 gap. The prompt forbids a second filler after step 3 — the model goes straight
 to the answer.
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Caller
+    participant BR as Bridge
+    participant GL as Gemini Live
+    participant KB as KBEngine
+    participant QD as Qdrant
+
+    C->>BR: "What is the brake fluid interval?"
+    BR->>GL: audio 16 kHz
+    GL-->>BR: toolCall initialize_search(query)
+    BR->>KB: start search as a background task
+    BR-->>GL: "search_initiated_successfully"
+    Note over BR,KB: search runs while the agent talks
+    GL-->>BR: audio "one moment, let me pull that up"
+    BR-->>C: filler is spoken here
+    KB->>QD: embed query, grouped vector search
+    QD-->>KB: 4 documents x 2 chunks
+    KB->>QD: scroll every chunk of the best page
+    QD-->>KB: whole page, in printed order
+    KB-->>BR: passages trimmed to 6000 chars
+    GL-->>BR: toolCall fetch_search_results
+    BR-->>GL: the passages
+    GL-->>BR: audio: the answer, with the page named
+    BR-->>C: answer, no gap
+```
+
+The dead air a naive implementation would produce sits between steps 4 and 11.
+Here it is filled with speech the model generated for exactly that purpose.
+
 ### 5.2 Grouped retrieval
 
 `kb_ggs_support` mixes a handful of one-page briefs with several
@@ -172,6 +227,30 @@ this collection is therefore configured (in `tools.py`) as:
 repair procedure spans several chunks; without it the agent reads out half a
 schedule and stops, which is worse than saying nothing.
 
+```mermaid
+flowchart TD
+    Q["query text"] --> C1{"in Redis<br/>result cache?"}
+    C1 -- "hit, 5 min TTL" --> OUT["passages to the model"]
+    C1 -- miss --> E{"embedding in<br/>process cache?"}
+    E -- miss --> AZ["Azure text-embedding-3-small<br/>1536-dim"]
+    AZ --> V["query vector"]
+    E -- hit --> V
+    V --> GRP["Qdrant query_points_groups<br/>group_by=filename<br/>limit=4, group_size=2"]
+    GRP --> R8["up to 8 chunks<br/>from 4 distinct documents"]
+    R8 --> EXP["scroll every chunk sharing<br/>filename + page of the best hit"]
+    EXP --> ST["stitch by chunk_index<br/>into the whole printed page"]
+    ST --> BUD["trim to 6000 chars, best-first<br/>floor of 2 passages"]
+    BUD --> OUT
+    OUT --> CACHE["write back to Redis"]
+```
+
+Three caches sit on that path, each for a different reason. The embedding cache
+is per-process and unbounded in TTL because a query's vector never changes. The
+Redis result cache is 5 minutes, because the collection can be re-ingested
+underneath it. Collection existence is cached after the first confirmed sighting
+— it used to be re-checked on every search, which put a second round trip to
+Frankfurt in front of every query.
+
 ### 5.3 Context budget
 
 Tool responses stay in the Live session's history, so every search permanently
@@ -182,7 +261,18 @@ the fourth question on. `_KB_CONTEXT_BUDGET = 6000` characters is spent
 top-down: the best passage always goes through intact, weaker supporting
 passages are dropped, and a floor of two passages is kept regardless.
 
-### 5.4 Citations
+### 5.4 Failing loudly rather than quietly
+
+A transient DNS or connection fault must not read as *"we have no documentation
+on that"*. Mid-call the two are indistinguishable to the caller, and the agent
+apologises for a gap that does not exist. So a search failure retries three
+times with backoff, rebuilding the Qdrant client each time in case the
+connection pool is poisoned, and then raises `KBUnavailable` — which the tool
+layer reports as a broken lookup, not as a miss. The synchronous Qdrant client
+is called through `asyncio.to_thread`, because calling it directly would block
+the event loop for the whole round trip and stall the audio in both directions.
+
+### 5.5 Citations
 
 Every stored chunk is prefixed with a bracketed header naming its document, page
 and section — `[Maintenance Manual — page 122 — 48. BRAKE FLUID]`. The
@@ -216,6 +306,26 @@ The pipeline:
    cosine, into `kb_ggs_support`. Deletion is per-filename rather than
    per-collection, so re-ingesting one manual leaves the rest intact.
 
+```mermaid
+flowchart TD
+    PDF["2,165 PDF pages"] --> LEG["Legend discovery<br/>one pass per document"]
+    LEG --> INJ["legend injected into the prompt<br/>for every page of that document"]
+    INJ --> VIS["Azure gpt-4.1-mini vision<br/>32 concurrent, 220 RPM / 225k TPM"]
+    VIS --> CP[("ecanter_pages.jsonl<br/>checkpoint")]
+    CP --> CH["chunk to 1,200 chars<br/>on whole lines, 2-line overlap"]
+    CH --> HDR["prefix each chunk with<br/>document, page and section"]
+    HDR --> EMB["Azure text-embedding-3-small<br/>1536-dim"]
+    EMB --> UP["upsert into kb_ggs_support<br/>delete by filename first"]
+    UP --> IDX["keyword payload index on filename"]
+    RERUN(["re-run"]) -.-> CP
+    CP -.->|"pages already extracted are skipped"| CH
+```
+
+The checkpoint is the load-bearing part. Vision extraction over 2,165 pages is
+the expensive step; writing it to JSONL before anything is embedded means a
+failure during embedding costs nothing to recover from, and a re-run resumes
+instead of re-spending the budget.
+
 A keyword payload index on `filename` is created here; the grouped search in
 §5.2 depends on it.
 
@@ -241,8 +351,31 @@ API to call.
 4. An enrichment pass normalises them, and `KBEngine.ingest` embeds and upserts
    them into `kb_fsecure_support`.
 
+```mermaid
+flowchart TD
+    P["Playwright, headless Chromium"] --> L["open the all-articles listing"]
+    L --> W["wait for the portal's JS to render"]
+    W --> LM{"more articles than we have?"}
+    LM -- yes --> CLK["click Load More"]
+    CLK --> W
+    LM -- no --> LINKS["article links"]
+    LINKS --> VISIT["visit each article"]
+    VISIT --> DOM["read question and resolution<br/>from the rendered DOM"]
+    DOM --> CSV[("support_kb.csv - 68 rows")]
+    CSV --> ROW["one row becomes one chunk:<br/>question | resolution | source_url"]
+    ROW --> EMB2["Azure text-embedding-3-small"]
+    EMB2 --> Q2["upsert into kb_fsecure_support"]
+```
+
+There is no HTML to fetch and no API to call — the listing and every article
+body are painted by client-side JavaScript, so a browser is the only thing that
+can see them. `ingest_csv` then turns each row into a single searchable chunk
+rather than splitting it, because a support article is already the right size
+for one answer.
+
 ```bash
 pip install playwright && playwright install chromium
+export SUPPORT_KB_BASE_URL=...  SUPPORT_KB_ARTICLES_URL=...
 python crawl_support_kb.py
 ```
 
@@ -275,15 +408,146 @@ being forwarded to Gemini, neither touching the network:
 
 Both are opt-in: `GENDER_ADAPTIVE_VOICE` and `ADAPTIVE_PACE`.
 
-## 8. Data stores
+## 8. Azure — what runs where
+
+Azure carries two unrelated jobs here: it hosts the service, and it supplies
+every non-Gemini model the service calls. They are separate resources and it is
+worth keeping them straight.
+
+```mermaid
+flowchart TB
+    subgraph Host["Azure App Service - Linux B1, Python 3.12"]
+        SH["start.sh"]
+        M["main.py :8000<br/>the only exposed port"]
+        T["test_realtime_gemini.py :8086<br/>internal"]
+        SH --> M
+        SH --> T
+    end
+
+    subgraph AOAI["Azure OpenAI - model deployments"]
+        EMB["text-embedding-3-small<br/>1536-dim"]
+        VIS["gpt-4.1-mini<br/>vision"]
+        RT["gpt-realtime-2.1<br/>speech-to-speech"]
+        CHAT["gpt-5-mini<br/>chat / responses"]
+        WSP["whisper<br/>speech-to-text"]
+    end
+
+    M -- "every KB search" --> EMB
+    M -- "the /ws/voice pipeline" --> RT
+    M -- "REST chat surface" --> CHAT
+    M -- "POST /api/transcribe" --> WSP
+    ING["ingest_manuals.py<br/>run offline"] -- "reads PDF pages" --> VIS
+    ING --> EMB
+```
+
+| Deployment | Used by | For |
+| --- | --- | --- |
+| `text-embedding-3-small` | `kb_engine.py`, both ingestion scripts | The one model on the hot path of every call — it embeds each search query, and embedded every chunk that was ever stored. 1536-dim, cosine. |
+| `gpt-4.1-mini` | `ingest_manuals.py` | Reading PDF pages as images into one-fact-per-line prose. Offline only; never touched during a call. |
+| `gpt-realtime-2.1` | `main.py` `/ws/voice` | The alternative speech-to-speech pipeline, paired with Sarvam TTS. The site uses the Gemini path instead. |
+| `gpt-5-mini` | `api_routes.py` `/chat` | The text chat surface for dashboards. |
+| `whisper` | `api_routes.py` `/api/transcribe` | One-shot transcription of uploaded audio. |
+
+**Why only one port is public.** App Service publishes a single container port.
+`start.sh` boots both apps, so `test_realtime_gemini.py` runs on 8086 inside the
+container but is unreachable from outside; `main.py` mounts its pipeline at
+`/ws/voice-gemini` and delegates into it. That indirection is the single most
+confusing thing about this deployment, and it is why the frontend probes
+`/health` to decide which path to open.
+
+**Configuration flows through app settings, not the image.** `deploy.sh` reads
+your local `.env` and pushes every key as an App Service application setting,
+deliberately skipping `PORT` because Azure manages it. The `.env` file itself is
+excluded from the deployment zip, so nothing secret is ever baked into the
+artefact.
+
+## 9. Qdrant — the knowledge base
+
+One collection per agent, named `kb_<scenario_key>`, created on demand with
+1536-dimension cosine vectors.
+
+| Collection | Contents | Built by |
+| --- | --- | --- |
+| `kb_ggs_support` | 5,753 chunks from 19 vehicle service documents | `ingest_manuals.py` plus `ingest_briefs.py` |
+| `kb_fsecure_support` | 68 scraped support articles, one chunk each | `crawl_support_kb.py` |
+
+Every point carries the same payload, and each field earns its place:
+
+```jsonc
+{
+  "text":        "[Maintenance Manual — page 122 — 48. BRAKE FLUID] Recommended fluid: …",
+  "filename":    "Maintenance Manual.pdf",    // grouping key, and the keyword index
+  "title":       "Canter Maintenance Manual", // human name, used in the chunk header
+  "page":        122,                         // half of the page-expansion key
+  "chunk_index": 3,                           // restores printed order when stitching
+  "agent_type":  "ggs_support",
+  "category":    "manual",
+  "doc_family":  "ecanter"                    // lets one family be re-ingested alone
+}
+```
+
+`filename` carries a **keyword payload index**, without which
+`query_points_groups` cannot group. `filename` + `page` is what `_expand_pages`
+filters on to scroll back every sibling chunk, and `chunk_index` is what puts
+them in the order they were printed in.
+
+Three Qdrant calls can happen inside one search: `query_points_groups` for the
+grouped hit list, then a `scroll` per page being expanded — all off the event
+loop via `asyncio.to_thread`, because the client is synchronous and a blocking
+round trip to Frankfurt would stall the audio in both directions. Results are
+cached in Redis for 5 minutes under a key that includes the grouping parameters,
+so changing the search shape cannot serve a result computed under the old one.
+
+## 10. Postgres and Redis
 
 | Store | Used for |
 | --- | --- |
-| **Postgres** (Neon) | `leads`, `calls`, `transcripts`, `availability_slots`, `bookings`, `knowledge_files`, `restaurant_reservations`, `restaurant_pre_orders`, `restaurant_booking_logs`, `feedback_agent_logs`, `reminder_contacts`. Schema is created on first connect. |
-| **Redis** (Upstash) | Session cache, customer pre-hydration, transcript pub/sub, embedding cache. |
-| **Qdrant** (Cloud) | `kb_ggs_support`, `kb_fsecure_support`. 1536-dim, cosine. |
+| **Postgres** (Neon) | `leads`, `calls`, `transcripts`, `availability_slots`, `bookings`, `knowledge_files`, `restaurant_reservations`, `restaurant_pre_orders`, `restaurant_booking_logs`, `feedback_agent_logs`, `reminder_contacts`. Schema is created on first connect. This is also what mid-call tool calls write to. |
+| **Redis** (Upstash) | Session cache, customer pre-hydration for outbound calls, live transcript pub/sub for dashboards, and the 5-minute KB result cache. |
 
-## 9. Multi-tenancy
+## 11. Telephony — Exotel
+
+The same agents answer a real phone number. Exotel bridges the PSTN call into a
+WebSocket and streams 8 kHz PCM16 both ways, which is essentially the only thing
+that differs from the browser path.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant PH as Caller's phone
+    participant EX as Exotel
+    participant BR as Bridge
+    participant GL as Gemini Live
+
+    Note over BR,EX: outbound calls start at POST /api/call/outbound
+    PH->>EX: PSTN call
+    EX->>BR: WebSocket /ws/exotel
+    Note over EX,BR: CallSid, From, scenario, language in the query string
+    EX->>BR: start event, then 8 kHz PCM16 frames
+    BR->>BR: resample 8 kHz to 16 kHz
+    BR->>GL: audio
+    GL-->>BR: audio at 24 kHz
+    BR->>BR: resample 24 kHz to 8 kHz
+    BR-->>EX: PCM16 frames
+    EX-->>PH: the agent speaks
+    BR->>BR: transcript to Postgres, published to Redis
+    Note over BR: on hangup: call summary and lead extraction
+```
+
+Four routes serve it: `/ws/exotel` on the Gemini pipeline and `/ws/exotel-azure`
+on the Azure Realtime pipeline, each with a trailing-slash twin because Exotel
+is inconsistent about it. Scenario, language and caller number arrive as query
+parameters rather than in a config message, because Exotel controls the URL and
+not the payload — which is why `voice_pipeline` and `exotel_pipeline` read their
+configuration from two different places.
+
+`POST /api/call/outbound` places outbound calls through the Exotel flow, and
+`GET /api/call/{call_sid}/transcript-stream` streams the transcript to a
+dashboard while the call is still running.
+
+None of this is on the path for a browser call — the site pays no telephony cost.
+
+## 12. Multi-tenancy
 
 Tenant-owned rows carry a `tenant_id` and Postgres Row-Level Security enforces
 the boundary across 14 tables. An *agent* is a tenant-owned row pointing at one
@@ -298,7 +562,7 @@ the owner URL in `ADMIN_DATABASE_URL` for migrations. The service logs a loud
 warning at startup when it detects it is connected as a bypassing role. Full
 detail in [TENANCY.md](TENANCY.md); tests in `tests/`.
 
-## 10. Configuration
+## 13. Configuration
 
 Copy `.env.example` to `.env`. Only `GEMINI_API_KEY` is strictly required for a
 browser call; the rest degrade gracefully.
@@ -310,7 +574,7 @@ browser call; the rest degrade gracefully.
 | `GEMINI_VOICE` | Default voice; per-agent branches override it (`Charon` for Indian languages, `Orus` otherwise). |
 | `PORT` | `main.py`'s port. Azure sets this itself — `deploy.sh` deliberately does not push it. |
 | `ALLOWED_ORIGINS` | Comma-separated. A `https://.*\.vercel\.app` regex is always allowed in addition. |
-| `DATABASE_URL` / `ADMIN_DATABASE_URL` | Postgres. See §9. |
+| `DATABASE_URL` / `ADMIN_DATABASE_URL` | Postgres. See §12. |
 | `TENANT_RLS_ENFORCED` | `false` keeps the `tenant_id` columns but stops enforcement. Debugging only. |
 | `REDIS_URL` | Session cache. |
 | `QDRANT_URL` / `QDRANT_API_KEY` | Vector store. |
@@ -322,7 +586,7 @@ browser call; the rest degrade gracefully.
 
 `.env` is gitignored and must stay that way — it holds live keys.
 
-## 11. What a call costs
+## 14. What a call costs
 
 Rates below are Google's published paid-tier pricing for
 `gemini-3.1-flash-live-preview`, the model this bridge runs:
@@ -378,7 +642,7 @@ infrastructure, not the model, is the dominant cost.
 towards ₹2 as the fixed cost spreads. Confirm your own SIP rate and cluster
 bills before quoting either figure — those two are inputs here, not measured.
 
-## 12. Where this sits
+## 15. Where this sits
 
 Enterprise voice-agent platforms in this market are largely English-and-Hindi
 first, with regional languages handled as translation over a single flattened
@@ -412,7 +676,7 @@ branch, and a live database write. A payment step would attach at exactly that
 point, and the latency-hiding pattern already proven for search is what would
 keep the caller from hearing the wait.
 
-## 13. Running locally
+## 16. Running locally
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -435,7 +699,7 @@ bridge instead, which is what the Vercel deployment does.
 `docker-compose.qdrant.yml` brings up a local Qdrant if you would rather not use
 the cloud one.
 
-## 14. Deploying
+## 17. Deploying
 
 ```bash
 ./deploy.sh
@@ -447,13 +711,36 @@ Azure manages), sets the startup command, zips the source excluding
 `.env*`, logs, caches and virtualenvs, deploys with Oryx build enabled, and
 restarts the app.
 
+```mermaid
+flowchart TD
+    ENV[".env on your machine"] --> S1["1. push every key as an<br/>App Service application setting"]
+    S1 -.->|"PORT is skipped - Azure sets it"| S1
+    SRC["source tree"] --> S3["3. zip, excluding .env*, logs,<br/>caches and virtualenvs"]
+    S2["2. set startup command<br/>./start.sh"] --> DEP
+    S1 --> DEP
+    S3 --> DEP["az webapp deploy - zip"]
+    DEP --> ORYX["Oryx build in the cloud<br/>pip install -r requirements.txt"]
+    ORYX --> RST["4. restart"]
+    RST --> RUN["start.sh boots main.py :8000<br/>and test_realtime_gemini.py :8086"]
+    RUN --> HC{"/health answers?"}
+    HC -- yes --> LIVE["the site's call button goes live"]
+    HC -- no --> LOG["check the App Service log stream"]
+```
+
+Two things about this that have bitten before. The app settings and the code are
+pushed **separately** — a settings-only change still needs the restart in step 4
+to take effect, and a code push does not pick up a `.env` edit unless step 1 ran.
+And `/health` answering `ok` proves only that `main.py` is up; it says nothing
+about whether the Gemini pipeline behind `/ws/voice-gemini` can actually reach
+the model. Place a real call before believing a deploy.
+
 Sanity check afterwards:
 
 ```bash
 curl https://<app>.azurewebsites.net/health
 ```
 
-## 15. Layout
+## 18. Layout
 
 ```
 main.py                  Public app: REST, Azure Realtime pipeline, Exotel, /ws/voice-gemini

@@ -17,6 +17,23 @@ is answering from a live vector store of 5,753 passages of vehicle service
 documentation while you listen, and the panel says so explicitly on the rare
 path where it falls back to a recording.
 
+```mermaid
+flowchart LR
+    U["Visitor<br/>browser microphone"] -->|"24 kHz PCM16"| S["Next.js site<br/>on Vercel"]
+    C["Phone caller"] -->|"PSTN"| X["Exotel"]
+    S -->|"WebSocket"| B
+    X -->|"8 kHz PCM16"| B["Voice bridge<br/>Azure App Service"]
+    B <-->|"speech in, speech out"| G["Gemini Live"]
+    G -->|"tool call: search"| B
+    B --> Q[("Qdrant<br/>5,753 passages")]
+    B --> P[("Postgres<br/>transcripts, bookings")]
+    B -->|"audio + transcript + citation"| S
+```
+
+The full architecture — the two-phase search that hides retrieval latency behind
+speech, how the manuals were read out of PDFs, which Azure deployment does what
+— is in **[backend/README.md](backend/README.md)**.
+
 ## What it demonstrates
 
 **Grounded answers, spoken.** Ask the Document search agent for a brake-fluid
