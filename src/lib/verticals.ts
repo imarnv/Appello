@@ -37,6 +37,13 @@ export type CallOption = {
   accent?: "indian" | "american";
   /** Overrides the signature's dialect label on the chip. */
   dialect?: string;
+  /**
+   * What to put in the config message's `language` field, when that differs
+   * from the picker code. The endpoint-security agent keys its greetings off
+   * bare codes ("de", "fr", "ja"), while the picker needs the regional tag to
+   * find a signature for the voice field.
+   */
+  backendLanguage?: string;
 };
 
 /** Stable identity for an option, since one code can appear twice. */
@@ -146,6 +153,76 @@ export const VERTICALS: Vertical[] = [
         },
         action: "3 documents cited · 0 figures paraphrased",
         latency: 590,
+      },
+    ],
+  },
+  {
+    id: "endpoint",
+    label: "Endpoint security",
+    scenario: "fsecure_support",
+    // Same BCP-47 handling as the fleet desk, but this agent's greeting table
+    // is keyed on bare codes for everything except English.
+    languageFormat: "bcp47",
+    business: "Endpoint Security Desk",
+    persona: "Mohit",
+    premise:
+      "Walks a caller through a fix, one step at a time, out of 68 scraped support articles.",
+    channel: "SIP · inbound",
+    // Every code here has a real greeting and a real language override in the
+    // fsecure_support branch. The picker code selects the voice field's
+    // signature; backendLanguage is what the bridge is actually sent.
+    options: [
+      { code: "en-IN", dialect: "Indian" },
+      { code: "fi-FI", backendLanguage: "fi" },
+      { code: "sv-SE", backendLanguage: "sv" },
+      { code: "de-DE", backendLanguage: "de" },
+      { code: "nl-NL", backendLanguage: "nl" },
+      { code: "fr-FR", backendLanguage: "fr" },
+      { code: "ja-JP", backendLanguage: "ja" },
+    ],
+    // The article topics actually present in the scraped collection.
+    sources: [
+      "VPN connectivity",
+      "Installation & updates",
+      "Subscriptions & licences",
+      "Account & password reset",
+      "Device management",
+      "Platform-specific fixes",
+    ],
+    turns: [
+      { who: "agent", text: "", latency: 250 },
+      {
+        who: "caller",
+        text: "I've forgotten my account password and I can't get in.",
+      },
+      {
+        who: "agent",
+        text: "Let me check the steps for that. Go to the login page and click \u201cForgot your password?\u201d, then enter your email address. A reset link comes to your inbox \u2014 check spam if it doesn't arrive \u2014 and you set a new password from there.",
+        cite: {
+          source: "Account & password reset",
+          span: "Forgot your password? \u2192 email \u2192 reset link \u2192 new password",
+        },
+        latency: 690,
+      },
+      {
+        who: "caller",
+        text: "Got it. Is the new VPN any faster than the old one?",
+      },
+      {
+        who: "agent",
+        text: "The updated VPN technology focuses on speed, connectivity and reliability. It's designed to make your connection feel almost as fast as when you're not using a VPN at all, especially on nearby servers.",
+        cite: {
+          source: "VPN connectivity",
+          span: "faster speeds \u00b7 connectivity \u00b7 reliability",
+        },
+        latency: 610,
+      },
+      { who: "caller", text: "That's all I needed, thanks." },
+      {
+        who: "agent",
+        text: "Happy to help. Thank you for calling the Endpoint Security Desk \u2014 have a great day.",
+        action: "2 articles cited \u00b7 resolved without escalation",
+        latency: 240,
       },
     ],
   },
@@ -403,10 +480,34 @@ const FLEET_DESK_GREETINGS: Record<string, string> = {
     "Hallo, hier ist der Fleet Service Desk, mein Name ist Gaurav, wie kann ich Ihnen helfen?",
 };
 
+/**
+ * Copied verbatim from FSECURE_GREETINGS in backend/test_realtime_gemini.py,
+ * keyed here by picker code rather than by the bare code the bridge uses.
+ */
+const ENDPOINT_GREETINGS: Record<string, string> = {
+  "en-IN":
+    "Hello, this is the Endpoint Security Desk, I am Mohit, how may I help you?",
+  "fi-FI":
+    "Hei, täällä Endpoint Security Desk, Mohit täällä, kuinka voin auttaa?",
+  "sv-SE":
+    "Hej, det här är Endpoint Security Desk, jag heter Mohit, hur kan jag hjälpa dig?",
+  "de-DE":
+    "Hallo, hier ist der Endpoint Security Desk, mein Name ist Mohit, wie kann ich Ihnen helfen?",
+  "nl-NL":
+    "Hallo, dit is de Endpoint Security Desk, ik ben Mohit, hoe kan ik u helpen?",
+  "fr-FR":
+    "Bonjour, ici l'Endpoint Security Desk, je suis Mohit, comment puis-je vous aider?",
+  "ja-JP":
+    "こんにちは、Endpoint Security Deskのモヒトです。どのようなご用件でしょうか？",
+};
+
 export function greeting(code: string, business: string): string {
   if (business === "The Royal Plate" && code === "en-IN") return RESTAURANT_EN;
   if (business === "Fleet Service Desk") {
     return FLEET_DESK_GREETINGS[code] ?? FLEET_DESK_GREETINGS["en-IN"];
+  }
+  if (business === "Endpoint Security Desk") {
+    return ENDPOINT_GREETINGS[code] ?? ENDPOINT_GREETINGS["en-IN"];
   }
   const template = GREETINGS[code] ?? GREETINGS["en-IN"];
   return template.replace("{b}", business);

@@ -223,15 +223,6 @@ export default function TrySection() {
                 )}
               </div>
 
-              {status === "idle" && bridge !== "ready" && (
-                <button
-                  onClick={playRecording}
-                  className="mt-2 h-11 w-full cursor-pointer rounded-full border border-hairline text-[0.9375rem] text-ink-2 transition-colors duration-200 hover:border-ink/25 hover:text-ink"
-                >
-                  Play a recorded call instead
-                </button>
-              )}
-
               {status === "ended" && mode === "scripted" && (
                 <button
                   onClick={playRecording}

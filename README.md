@@ -251,15 +251,36 @@ after the caller has stopped talking, injecting a fact into a live session
 without cutting the caller off — are provider-independent, and they are the
 parts already proven in this codebase.
 
+### This is not a paper design
+
+The payment half of it is already running in production in another product built
+by the same team, against **PhonePe**, and it is the same shape end to end:
+
+| Piece | How it works there |
+| --- | --- |
+| Initiate | A callable function creates the order and registers the webhook URL as the provider's callback. |
+| Checkout | A native PhonePe SDK plugin takes the payer to hosted checkout. Card data never reaches the application. |
+| Client callback | The app reports back when checkout closes — and the server **re-queries the provider's order-status endpoint** rather than believing it. |
+| Server webhook | A plain HTTP endpoint verifies `X-VERIFY`, an `SHA256(payload + salt)` signature with a salt index, and rejects anything that fails. |
+| Reconcile | Payment and order records move to `completed` / `confirmed` together, keyed on the transaction id, so a duplicate delivery is harmless. |
+| Failure | An explicit failure path marks the payment `failed` rather than leaving it pending forever. |
+
+The "treat the client callback as a hint and confirm server-side" rule described
+above is not aspiration — it is what that integration already does, and it is
+the part most people get wrong.
+
 ### Status
 
-**Not enabled in this build.** The flow is specified end to end and every
-mechanism it leans on is already running here, but no payment adapter is wired
-up yet. Live merchant credentials for this project sit with **PhonePe**; the
-Razorpay path is the same adapter against a different endpoint and signing
-scheme.
+**Not wired into the voice bridge in this build.** What is missing is the
+adapter between two things that both exist: a proven payment flow on one side,
+and a live tool-call seam on the other. The remaining work is the *New* rows in
+the table above — a tool declaration, an `execute_tool` branch, a webhook route
+on this service, and a Redis channel so the confirmation can reach a session
+that may be held by a different worker.
 
-Everything on the *New* rows above is the remaining work.
+Live merchant credentials for this team sit with PhonePe. The provider is one
+adapter behind the interface, so a different gateway changes the create-link
+call and the signature check and nothing else.
 
 ## How the documents get in
 

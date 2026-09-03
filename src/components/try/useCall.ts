@@ -246,7 +246,7 @@ export function useCall(vertical: Vertical, option: CallOption) {
     // language-override off it. The other four take a bare language name.
     const language =
       vertical.languageFormat === "bcp47"
-        ? langCode
+        ? (option.backendLanguage ?? langCode)
         : BACKEND_LANGUAGE[langCode];
 
     if (bridge === "ready" && url && language) {
@@ -263,7 +263,14 @@ export function useCall(vertical: Vertical, option: CallOption) {
           ? "This agent has no live branch for that language yet — this is a recorded call."
           : "Checking the voice bridge — this is a recorded call.",
     );
-  }, [bridge, langCode, vertical.languageFormat, startLive, startScripted]);
+  }, [
+    bridge,
+    langCode,
+    vertical.languageFormat,
+    option.backendLanguage,
+    startLive,
+    startScripted,
+  ]);
 
   /** Explicitly ask for the recording, whatever the bridge is doing. */
   const playRecording = useCallback(() => startScripted(null), [startScripted]);

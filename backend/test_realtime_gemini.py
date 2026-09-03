@@ -155,7 +155,7 @@ def voice_resume_directive(agent_name: str, lang_display: str) -> str:
     """Spoken by the newly-swapped voice so the handover isn't silent."""
     return (
         "INSTRUCTION FOR YOU — do not read this text out loud. "
-        f"You are {agent_name}, from the F-Secure support team — the customer just asked to be "
+        f"You are {agent_name}, from the Endpoint Security Desk — the customer just asked to be "
         "connected with you, and you have taken over this call mid-conversation. "
         "Never use the word \"agent\" when you speak. "
         f"The VERY FIRST words out of your mouth must be your introduction, in {lang_display} — for "
@@ -915,14 +915,14 @@ async def voice_pipeline(ws: WebSocket):
         # Language-specific greetings and voice config
         FSECURE_GREETINGS = {
             "en-IN": "Hello, this is the Endpoint Security Desk, I am Mohit, how may I help you?",
-            "en-US": "Hello, this is F-Secure technical support. My name is Mohit, how may I help you today?",
-            "fi": "Hei, täällä F-Securen tekninen tuki, Mohit täällä, kuinka voin auttaa?",
-            "sv": "Hej, det här är F-Secures tekniska support, jag heter Mohit, hur kan jag hjälpa dig?",
-            "de": "Hallo, hier ist der technische Support von F-Secure, mein Name ist Mohit, wie kann ich Ihnen helfen?",
-            "nl": "Hallo, dit is de technische ondersteuning van F-Secure, ik ben Mohit, hoe kan ik u helpen?",
-            "fr": "Bonjour, ici le support technique de F-Secure, je suis Mohit, comment puis-je vous aider?",
-            "ja": "こんにちは、F-Secureのテクニカルサポートチームのモヒトです。どのようなご用件でしょうか？",
-            "ja-JP": "こんにちは、F-Secureのテクニカルサポートチームのモヒトです。どのようなご用件でしょうか？",
+            "en-US": "Hello, this is the Endpoint Security Desk. My name is Mohit, how may I help you today?",
+            "fi": "Hei, täällä Endpoint Security Desk, Mohit täällä, kuinka voin auttaa?",
+            "sv": "Hej, det här är Endpoint Security Desk, jag heter Mohit, hur kan jag hjälpa dig?",
+            "de": "Hallo, hier ist der Endpoint Security Desk, mein Name ist Mohit, wie kann ich Ihnen helfen?",
+            "nl": "Hallo, dit is de Endpoint Security Desk, ik ben Mohit, hoe kan ik u helpen?",
+            "fr": "Bonjour, ici l'Endpoint Security Desk, je suis Mohit, comment puis-je vous aider?",
+            "ja": "こんにちは、Endpoint Security Deskのモヒトです。どのようなご用件でしょうか？",
+            "ja-JP": "こんにちは、Endpoint Security Deskのモヒトです。どのようなご用件でしょうか？",
         }
         greeting_text = FSECURE_GREETINGS.get(lang, FSECURE_GREETINGS["en-IN"])
 
