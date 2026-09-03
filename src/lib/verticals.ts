@@ -359,9 +359,10 @@ export const VERTICALS: Vertical[] = [
     sources: ["LOAN & EMI KNOWLEDGE", "Payment Methods", "Tenure & Schedule"],
     note: {
       label: "Mid-call checkout · not enabled here",
-      body:
-        "PhonePe, opened mid-call and confirmed from a signed webhook. " +
-        "In backend/payments.py — off on this demo.",
+      // The "not enabled here" caveat lives in the label, so the body does
+      // not repeat it — but it must stay somewhere, or this reads as a promise
+      // the call button cannot keep.
+      body: "PhonePe, opened mid-call and confirmed from a signed webhook.",
     },
     turns: [
       { who: "agent", text: "", latency: 180 },
