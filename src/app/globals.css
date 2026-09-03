@@ -1,26 +1,144 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ─────────────────────────────────────────────────────────────
+   Appello design tokens
+
+   Palette rule: the spectral ramp is not decoration. It is the
+   magma colormap used to plot speech spectrograms, and it appears
+   ONLY where colour encodes acoustic energy — the voice field, the
+   waveform, the language signatures. Chrome stays ink on paper.
+   ───────────────────────────────────────────────────────────── */
+
+@theme {
+  --color-paper: #ffffff;
+  --color-paper-2: #fbfbfc;
+  --color-ink: #0b0b0f;
+  --color-ink-2: #55565f;
+  --color-ink-3: #8a8b94;
+  --color-hairline: #e8e8ec;
+  --color-hairline-2: #f1f1f4;
+
+  /* Spectral ramp — magma colormap stops, low energy → high energy */
+  --color-s0: #c9cad1;
+  --color-s1: #3b0f70;
+  --color-s2: #8c2981;
+  --color-s3: #de4968;
+  --color-s4: #fe9f6d;
+
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: auto;
+  }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv01";
+  }
+
+  ::selection {
+    background: var(--color-s2);
+    color: #fff;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-s1);
+    outline-offset: 3px;
+    border-radius: 3px;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer utilities {
+  /* Display type — Bricolage at its display optical size, tightened.
+     The opsz axis is what makes this face worth using large. */
+  .type-display {
+    font-family: var(--font-display);
+    font-variation-settings:
+      "opsz" 48,
+      "wdth" 100;
+    font-weight: 500;
+    letter-spacing: -0.038em;
+    line-height: 0.92;
+  }
+
+  .type-h2 {
+    font-family: var(--font-display);
+    font-variation-settings: "opsz" 32;
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    line-height: 1.02;
+  }
+
+  /* Instrumentation type — every number, code and label on this page
+     is measured data, so it is set in mono. */
+  .type-meta {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .type-data {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  .hairline {
+    border-color: var(--color-hairline);
+  }
+
+  /* The field arrives rather than popping in with the first frame. */
+  .field-in {
+    animation: field-in 1.4s var(--ease-out-quint) both;
+  }
+}
+
+@keyframes field-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Scrollbar — thin, ink, unobtrusive */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #dcdce2;
+  border: 3px solid #fff;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c2c2cb;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

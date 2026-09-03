@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +40,32 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Google Cloud service-account keys — never commit or deploy
+rare-guide-*.json
+*-service-account*.json
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+
+# secrets and credentials — never commit, anywhere in the tree
+*.env
+.env*
+!.env.example
+*service-account*.json
+*credentials*.json
+*-key.json
+*.pem
+*.p12
+*.pfx
+id_rsa*
+
+# runtime artefacts
+*.log
+*.zip
+*.jsonl
+qdrant_storage/

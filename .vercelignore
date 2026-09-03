@@ -1,0 +1,12 @@
+# Credentials that must never leave this machine.
+*.json.key
+rare-guide-*.json
+.env*
+!.env.example
+
+# The Python voice bridge is a long-lived WebSocket service. Vercel cannot run
+# it, and it carries a 120MB virtualenv.
+backend/
+
+# Local only
+.claude/

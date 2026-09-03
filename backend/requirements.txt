@@ -1,0 +1,18 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+websockets>=14.0
+aiohttp==3.10.0
+redis[hiredis]==5.0.0
+asyncpg==0.29.0
+python-dotenv==1.0.1
+pydantic==2.8.0
+pydantic-settings==2.4.0
+numpy==1.26.4
+python-multipart
+qdrant-client
+python-dateutil
+pypdf
+
+# Google Cloud Text-to-Speech (pre-rendered measurement announcements)
+google-auth>=2.30.0
+requests>=2.31.0
