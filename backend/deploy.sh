@@ -9,12 +9,45 @@
 set -e
 
 # ─── Config ─────────────────────────────────────────────────────────────
-APP_NAME="voicera-bridge"
-RESOURCE_GROUP="voicera"
-PLAN="ASP-voicera-9892"
+# Appello deploys to its OWN App Service. It shares the existing plan, which
+# costs nothing extra, but is a separate app so a deploy here cannot disturb
+# anything else already running on that plan.
+#
+# Do not point APP_NAME at another product's app. This tree has diverged from
+# the bridge it was copied from — it drops the /ws/measurement routes and adds
+# /webhooks/phonepe — so deploying it over a different service would quietly
+# remove endpoints that service's callers still use.
+APP_NAME="${APPELLO_APP_NAME:-appello-bridge}"
+RESOURCE_GROUP="${APPELLO_RESOURCE_GROUP:-voicera}"
+PLAN="${APPELLO_PLAN:-ASP-voicera-9892}"
 SKU="B1"
 RUNTIME="PYTHON:3.12"
 STARTUP_CMD="./start.sh"
+
+if [ "$APP_NAME" = "voicera-bridge" ]; then
+  echo "❌ APP_NAME is set to the shared bridge. This tree would remove routes"
+  echo "   that other apps still call. Deploy that service from its own folder."
+  exit 1
+fi
+
+# ─── Step 0: create the app if this is the first deploy ────────────────────
+if ! az webapp show --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+     --output none 2>/dev/null; then
+  echo "📦 Step 0/3: '$APP_NAME' does not exist yet — creating it on plan $PLAN..."
+  az webapp create \
+    --name "$APP_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --plan "$PLAN" \
+    --runtime "$RUNTIME" \
+    --output none
+  # WebSockets are off by default and this service is nothing but WebSockets.
+  az webapp config set \
+    --name "$APP_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --web-sockets-enabled true \
+    --output none
+  echo "✅ Created $APP_NAME with WebSockets enabled."
+fi
 
 echo "🚀 Deploying $APP_NAME to Azure..."
 
@@ -78,6 +111,6 @@ az webapp restart --name "$APP_NAME" --resource-group "$RESOURCE_GROUP"
 echo ""
 echo "════════════════════════════════════════════════════════════"
 echo "  ✅ Deployment complete!"
-echo "  🌐 URL: https://${APP_NAME}-dke5c6b4c6fba3e5.swedencentral-01.azurewebsites.net"
+echo "  🌐 URL: https://$(az webapp show --name \"$APP_NAME\" --resource-group \"$RESOURCE_GROUP\" --query defaultHostName -o tsv)"
 echo "  📋 Startup: $STARTUP_CMD"
 echo "════════════════════════════════════════════════════════════"

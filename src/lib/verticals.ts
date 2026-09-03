@@ -340,7 +340,7 @@ export const VERTICALS: Vertical[] = [
     business: "Easy Loans App",
     persona: "Mohan",
     premise:
-      "Chases an overdue EMI politely, and opens a secure checkout on the call itself.",
+      "Chases an overdue EMI politely, and offers a way to settle it there and then.",
     channel: "SIP · outbound",
     // The only agent with a language branch: hindi / tamil / telugu / english.
     // Its English is always Indian, so there is no accent choice to offer.
@@ -350,12 +350,7 @@ export const VERTICALS: Vertical[] = [
       { code: "ta-IN" },
       { code: "te-IN" },
     ],
-    sources: [
-      "LOAN & EMI KNOWLEDGE",
-      "Payment Methods",
-      "Tenure & Schedule",
-      "create_payment_link",
-    ],
+    sources: ["LOAN & EMI KNOWLEDGE", "Payment Methods", "Tenure & Schedule"],
     turns: [
       { who: "agent", text: "", latency: 180 },
       { who: "caller", text: "Yes, this is Arnav." },
@@ -394,12 +389,13 @@ export const VERTICALS: Vertical[] = [
       { who: "caller", text: "Yes, go ahead." },
       {
         who: "agent",
-        // The agent calls create_payment_link here. It never reads the URL out
-        // and never asks for card details — the link appears in the panel, and
-        // the customer types their details on the provider's page.
-        text: "That's open on your screen now, valid for about fifteen minutes. I'll stay on the line while you finish.",
-        action: "create_payment_link · ₹5,000 · awaiting the provider",
-        latency: 640,
+        // Deliberately matches what the deployed bridge actually does today.
+        // The create_payment_link path exists in backend/ but is not enabled on
+        // the hosted bridge, so depicting a checkout opening here would show a
+        // capability this recording cannot back up.
+        text: "I'll send you a secure payment link — UPI, net banking or card all work on it.",
+        action: "payment link sent",
+        latency: 320,
       },
     ],
   },

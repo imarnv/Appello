@@ -280,6 +280,11 @@ the agent tells the customer it will send the link separately rather than failin
 mid-sentence. Put sandbox credentials in `backend/.env` and the whole path runs
 end to end without moving real money.
 
+What is tested today: signature verification against tampered and forged
+payloads, the unconfigured-decline path, and cross-worker event delivery through
+Redis. What is not: the round trip to the provider itself, which needs merchant
+credentials.
+
 Two things the deployment needs beyond the keys: `PUBLIC_BASE_URL` has to point
 at a publicly reachable host, because the provider posts the webhook to it, and
 that URL has to be registered in the provider dashboard.
@@ -364,8 +369,8 @@ flowchart TB
         L6["transcripts, analytics,<br/>multi-tenant RLS"]
     end
 
-    subgraph Gap["Built, not yet run on live traffic"]
-        G1["payment capture<br/>exercised on sandbox"]
+    subgraph Gap["Built, not yet exercised end to end"]
+        G1["payment capture<br/>needs merchant credentials"]
         G2["self-serve document upload<br/>with progress"]
         G3["evaluation harness for<br/>answer correctness"]
     end
@@ -383,7 +388,7 @@ flowchart TB
 
 | Limit | Why, and what it would take |
 | --- | --- |
-| **Payments run on sandbox** | The whole path is implemented — tool, adapter, signed webhook, server-side re-check, confirmation folded into the live call — and is inert until provider credentials are set. It has been exercised against sandbox, not live traffic. |
+| **Payments not yet exercised against the provider** | The whole path is implemented — tool, adapter, signed webhook, server-side re-check, confirmation folded into the live call. Signature verification, the unconfigured-decline path and cross-worker event delivery are tested; the provider round trip is not, because it needs merchant credentials. |
 | **Cold start** | Azure App Service B1 sleeps when idle, so the first call after a quiet period waits several seconds on the container. An always-on tier or a warming ping removes it. |
 | **Retrieval tuning is per-corpus** | The grouping and page-expansion settings that make the manuals work were chosen *for* the manuals. A new corpus needs its own pass; there is no automatic tuner. |
 | **Language set is per-agent** | The platform speaks many more than any one agent offers. The picker deliberately shows only the languages an agent has a real greeting and override for. |
