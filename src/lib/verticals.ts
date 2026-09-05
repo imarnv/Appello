@@ -79,10 +79,16 @@ export type Vertical = {
   sources: string[];
   /**
    * A capability this agent has in the codebase that the hosted demo does not
-   * run. Rendered under the sources row and always says so explicitly — an
-   * unlabelled mention would read as a promise the live call cannot keep.
+   * run. Gets its own column beside the transcript, and always carries its
+   * status — an unlabelled mention would read as a promise the live call
+   * cannot keep.
    */
-  note?: { label: string; body: string };
+  capability?: {
+    label: string;
+    status: string;
+    steps: { title: string; detail: string }[];
+    footnote?: string;
+  };
   turns: Turn[];
 };
 
@@ -357,12 +363,35 @@ export const VERTICALS: Vertical[] = [
       { code: "te-IN" },
     ],
     sources: ["LOAN & EMI KNOWLEDGE", "Payment Methods", "Tenure & Schedule"],
-    note: {
-      label: "Mid-call checkout · not enabled here",
-      // The "not enabled here" caveat lives in the label, so the body does
-      // not repeat it — but it must stay somewhere, or this reads as a promise
-      // the call button cannot keep.
-      body: "PhonePe, opened mid-call and confirmed from a signed webhook.",
+    capability: {
+      label: "Mid-call checkout",
+      // Carried on its own chip rather than buried in prose. This sits beside a
+      // working call button, so the status has to be impossible to skim past.
+      status: "not enabled here",
+      steps: [
+        {
+          title: "Agent opens the checkout",
+          detail:
+            "Confirms the amount aloud, then calls create_payment_link. It never asks for card details.",
+        },
+        {
+          title: "PhonePe hosts the page",
+          detail:
+            "The link lands in this panel rather than being read out. Card data never reaches the bridge.",
+        },
+        {
+          title: "Signed webhook comes back",
+          detail:
+            "Verified, then the order is re-queried server-side — a client callback alone is never trusted.",
+        },
+        {
+          title: "Agent says so mid-call",
+          detail:
+            "Folded in at a turn boundary, so the confirmation never cuts the caller off.",
+        },
+      ],
+      footnote:
+        "Provider sits behind one adapter — swapping it changes nothing else.",
     },
     turns: [
       { who: "agent", text: "", latency: 180 },

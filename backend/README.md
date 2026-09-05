@@ -284,11 +284,43 @@ first-generation figures are announced as such rather than quoted as current.
 
 ### 6.1 Technical manuals — `ingest_manuals.py`
 
-The commercial-vehicle service library is 2,165 pages of PDF. Plain text extraction is
-not enough: maintenance schedules are legend-coded tables (`• L L L | L: 24`)
-whose symbol definitions sit on a *different page* from the table, so a page read
-in isolation produces confident nonsense — a dot column gets read as a distance
-column and every interval shifts one place.
+The commercial-vehicle service library is 2,165 pages of PDF, and text
+extraction is not merely lossy on it — it is useless, because in these documents
+**the meaning is carried by the layout, not by the words**.
+
+A maintenance schedule is a matrix. The rows are components, the columns are
+service intervals, and the cells are dots and single-letter marks:
+
+```
+Maintenance item        ☆   40 (24)   80 (48)   120 (72)   Months
+Brake fluid                    •         L          •        24
+Rear axle gear oil             –         R          –        24
+```
+
+Everything a technician needs is in the *position* of a mark, and the key to what
+each mark means — `L` lubricate, `R` replace, `•` inspect — is defined on a
+different page. Pull that page through a text extractor and you get a row of
+components followed by a stream of loose glyphs with no column alignment left.
+Embed that and you have embedded nothing: the vector describes a page that says
+"brake fluid, dot, L, dot, 24" and will happily match a query about brake fluid
+while carrying no interval at all. Worse, it fails *confidently* — a dot column
+read as a distance column shifts every interval one place left, and the agent
+then states a wrong service interval with total conviction.
+
+So pages are **rendered as images and read by a vision model** instead, which can
+see which column a mark sits in. Two passes:
+
+1. **Legend discovery** runs once per document to find the symbol key, and that
+   legend is injected into the prompt for every page of that document — so the
+   model reading page 40 knows what `L` meant on page 12.
+2. **Page extraction** turns the matrix into one fact per line, with the figures
+   written out in full: *"Brake fluid requires visual inspection at 30,000 km,
+   60,000 km, 90,000 km and 120,000 km, and replacement every 24 months."*
+
+Only then is anything embedded. The vectors are computed over recovered prose, so
+a search for "brake fluid interval" matches a sentence that actually contains the
+interval — which is what makes the agent able to quote a figure exactly rather
+than approximate one.
 
 The pipeline:
 

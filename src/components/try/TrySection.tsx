@@ -114,7 +114,13 @@ export default function TrySection() {
           })}
         </div>
 
-        <div className="mt-8 grid overflow-hidden rounded-2xl border border-hairline lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+        <div
+          className={`mt-8 grid overflow-hidden rounded-2xl border border-hairline ${
+            vertical.capability
+              ? "lg:grid-cols-[minmax(0,23rem)_minmax(0,1fr)_minmax(0,19rem)]"
+              : "lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]"
+          }`}
+        >
           {/* ── Call panel. Deliberately unpainted so the voice field, which
                 flies in from the hero, shows through the orb slot. ────────── */}
           <div className="flex flex-col justify-between gap-8 overflow-y-auto border-b border-hairline p-7 lg:h-[40rem] lg:border-b-0 lg:border-r">
@@ -151,22 +157,6 @@ export default function TrySection() {
               <p className="mt-2 max-w-[30ch] text-[0.875rem] leading-relaxed text-ink-2">
                 {vertical.premise}
               </p>
-
-              {/* A capability that is in the codebase but not on this deploy.
-                  It sits with the premise rather than under the sources row so
-                  it is read before the call button, and its label carries the
-                  caveat — an unlabelled mention beside a live call reads as a
-                  promise the call cannot keep. */}
-              {vertical.note && (
-                <div className="mt-4 border-l-2 border-hairline pl-3">
-                  <p className="type-meta text-[0.5625rem] leading-relaxed text-ink-3">
-                    {vertical.note.label}
-                  </p>
-                  <p className="mt-1 text-[0.8125rem] leading-relaxed text-ink-2">
-                    {vertical.note.body}
-                  </p>
-                </div>
-              )}
             </div>
 
             {/* The orb lands here. No background — the fixed canvas is behind. */}
@@ -299,6 +289,64 @@ export default function TrySection() {
               persona={vertical.persona}
             />
           </div>
+
+          {/* ── Capability column ───────────────────────────────────────────
+                Deliberately unlike the two panels beside it: a tinted ground
+                and a numbered rail, so it reads as a note about the system
+                rather than as part of the call you are about to place. The
+                status chip is the first thing in it. ─────────────────────── */}
+          {vertical.capability && (
+            <div className="flex flex-col gap-5 overflow-y-auto border-t border-hairline bg-hairline-2 p-6 lg:h-[40rem] lg:border-l lg:border-t-0">
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="type-meta text-[0.5625rem] text-ink">
+                    {vertical.capability.label}
+                  </span>
+                  <span
+                    className="type-meta rounded-full px-2 py-0.5 text-[0.5rem]"
+                    style={{
+                      color: "var(--color-s3)",
+                      backgroundColor:
+                        "color-mix(in srgb, var(--color-s3) 12%, transparent)",
+                    }}
+                  >
+                    {vertical.capability.status}
+                  </span>
+                </div>
+              </div>
+
+              <ol className="flex flex-col gap-4">
+                {vertical.capability.steps.map((step, i) => (
+                  <li key={step.title} className="flex gap-3">
+                    <span
+                      className="type-data mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[0.625rem]"
+                      style={{
+                        color: "var(--color-s3)",
+                        backgroundColor:
+                          "color-mix(in srgb, var(--color-s3) 14%, transparent)",
+                      }}
+                    >
+                      {i + 1}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[0.8125rem] font-medium leading-snug text-ink">
+                        {step.title}
+                      </p>
+                      <p className="mt-1 text-[0.75rem] leading-relaxed text-ink-3">
+                        {step.detail}
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+
+              {vertical.capability.footnote && (
+                <p className="mt-auto border-t border-hairline pt-4 text-[0.75rem] leading-relaxed text-ink-3">
+                  {vertical.capability.footnote}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* ── Language picker ─────────────────────────────────────────────── */}

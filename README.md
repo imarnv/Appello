@@ -304,7 +304,7 @@ Two corpora, two very different problems, one collection format.
 ```mermaid
 flowchart TB
     subgraph PDFs["Technical manuals - 2,165 pages"]
-        A1["PDF pages"] --> A2["read as images by a vision model<br/>legend-aware, so coded tables survive"]
+        A1["PDF pages"] --> A2["rendered as images, read by a vision model<br/>legend-aware, so dot-matrix tables survive"]
         A2 --> A3["checkpoint to JSONL"]
         A3 --> A4["chunk on whole lines"]
     end
@@ -323,11 +323,24 @@ flowchart TB
     R --> AG["the agent, mid-call"]
 ```
 
-The manuals could not be read as plain text: maintenance schedules are
-legend-coded tables whose symbol definitions live on a *different page*, so a
-page read in isolation produces confident nonsense. The support portal had no
-HTML to fetch at all — listing and article bodies are painted by client-side
-JavaScript, so a real browser was the only thing that could see them.
+**The manuals could not be read as text at all.** A maintenance schedule is a
+matrix: components down the side, service intervals across the top, and dots and
+single-letter marks in the cells. The meaning is in *which column* a mark sits
+in, and the key to what each mark means is printed on a different page. Text
+extraction returns the component names followed by a stream of loose glyphs with
+the column alignment gone — embed that and you have embedded nothing useful: a
+vector that matches "brake fluid" while carrying no interval, or worse, one
+column out, so the agent states the wrong figure with total confidence.
+
+So the pages are rendered as images and read by a vision model, which can see
+which column a mark occupies. A legend-discovery pass finds the symbol key first
+and injects it into every page of that document. Only the recovered prose —
+*"replacement every 24 months"* — is embedded, which is why the agent can quote a
+figure exactly instead of approximating it.
+
+The support portal had the opposite problem: no HTML to fetch at all. Listing and
+article bodies are painted by client-side JavaScript, so a real browser was the
+only thing that could see them.
 
 That bracketed header on every chunk is what lets the agent say *"that's from
 the Maintenance Manual, page 122"* instead of just asserting a number.
